@@ -68,10 +68,10 @@ Rules:
 
 ## Required Runtime Agents
 
-- `nexon-recon-agent`: supervisor/orchestrator agent. Use `../../agents/supervisor/PROMPT.md` from the full fleet pack.
-- `nexon-recon-exception-investigator`: exception investigator sub-agent. Use `../../agents/exception-investigator/PROMPT.md` from the full fleet pack.
+- `nexon-recon-agent`: supervisor/orchestrator agent.
+- `nexon-recon-exception-investigator`: exception investigator sub-agent.
 
-The supervisor performs validation by calling deterministic validation scripts, especially `scripts/validate_run.py`. Do not add additional default runtime sub-agents.
+The fleet resolves agent prompts and routing by agent name. The supervisor performs validation by calling deterministic validation scripts, especially `scripts/validate_run.py`. Do not add additional default runtime sub-agents.
 
 ## Deterministic Script Entry Points
 
