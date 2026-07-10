@@ -1,0 +1,36 @@
+timezone: Australia/Sydney
+
+profiles:
+  billing_profile: nexon-recon-profile-dev
+  provider_api_profile: nexon-recon-profile-dev
+
+features:
+  provider_api_enabled: false
+  billing_query_enabled: false
+  db_update_enabled: false
+  failure_notifications_enabled: false
+
+provider_api_adapters:
+  equinix: true
+
+billing:
+  mode: read_only_sql
+  agent_sql_allowed: true
+
+reports:
+  evidence_summary:
+    auto_matched: short
+    max_chars: 160
+
+limits:
+  max_zip_members: 2000
+  max_single_file_mb: 250
+  fail_closed_on_unreadable_archive: true
+
+failure_handling:
+  notify_operator: false
+  notification_mode: outlook
+  notification_content: text_only
+
+db_update_policy:
+  allow_deferred_without_invoice_number: true
