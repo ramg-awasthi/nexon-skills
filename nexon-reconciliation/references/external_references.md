@@ -13,6 +13,8 @@ Implementation note: use a local skill while iterating. Package as a plugin late
 
 Runtime SharePoint access uses the native LangSmith SharePoint tool. Do not use Graph API references, browser profiles, or model-driven UI operations to define normal Phase 1 SharePoint behavior.
 
+The active runtime site is `Nexon Reconciliation Automation` at `https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation`, library `Shared Documents`.
+
 ## Observability
 
 - LangSmith observability: https://docs.langchain.com/langsmith/observability

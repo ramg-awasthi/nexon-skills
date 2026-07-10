@@ -4,6 +4,17 @@ This setup is performed once per environment. It is not part of a normal reconci
 
 ## SharePoint Spaces
 
+Create these folders only in:
+
+```text
+Site: Nexon Reconciliation Automation
+Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
+Library: Shared Documents
+Browser URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation/Shared%20Documents/Forms/AllItems.aspx
+```
+
+Do not create or use these Phase 1 folders in the old personal OneDrive `Recon` folder, the `Account Recon` site, or any other searched/discovered SharePoint location.
+
 Create upload folders:
 
 ```text

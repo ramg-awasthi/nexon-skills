@@ -27,6 +27,16 @@ Phase 1 supports:
 
 ## Folder Contract
 
+Production folders live only in the dedicated SharePoint site:
+
+```text
+Site: Nexon Reconciliation Automation
+Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
+Library: Shared Documents
+```
+
+The old personal OneDrive `Recon` folder and the previously discovered `Account Recon` site are reference/legacy locations only, not normal Phase 1 runtime targets.
+
 Users upload to:
 
 ```text

@@ -1,6 +1,6 @@
 ---
 name: nexon-reconciliation
-description: Operate the Nexon Phase 1 reconciliation workflow for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using configured deterministic adapters. Use when intaking invoices from SharePoint upload, creating run folders, calling deterministic telco parsers, querying approved read-only billing evidence, matching, producing raw/refined reports, validating runs, or coordinating exception investigation.
+description: Operate the Nexon Phase 1 reconciliation workflow for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using configured deterministic adapters and the dedicated Nexon Reconciliation Automation SharePoint site. Use when intaking invoices from SharePoint upload, creating run folders, calling deterministic telco parsers, querying approved read-only billing evidence, matching, producing raw/refined reports, validating runs, or coordinating exception investigation.
 ---
 
 # Nexon Reconciliation
@@ -10,6 +10,7 @@ Use this skill for Nexon reconciliation runtime orchestration.
 ## Non-Negotiable Rules
 
 - Use the native SharePoint tool for SharePoint upload/result access and deterministic scripts for local staging, ZIP extraction, billing lookup, matching, report writing, validation, and any optional DB update.
+- Use only the dedicated SharePoint site `Nexon Reconciliation Automation` at `https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation` for Phase 1 upload/result storage.
 - Use `nexon-telco-parsers` for invoice extraction.
 - Do not parse invoices with free-form model reasoning.
 - Do not invent invoice rows.
@@ -18,6 +19,20 @@ Use this skill for Nexon reconciliation runtime orchestration.
 - Keep `db_update_enabled=false` unless explicit approval, write credentials/update endpoint, dry-run, audit logging, and human-verification rules are supplied.
 - Treat SharePoint upload/result root creation as one-time setup, not a normal reconciliation run.
 - If required upload/result roots are missing, stop with `setup_incomplete`.
+
+## Production Storage Target
+
+The active Phase 1 storage target is:
+
+```text
+Site: Nexon Reconciliation Automation
+Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
+Library: Shared Documents
+Browser URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation/Shared%20Documents/Forms/AllItems.aspx
+Tool: native LangSmith SharePoint tool
+```
+
+Do not use the old personal OneDrive `Recon` folder, the previously discovered `Account Recon` site, or any searched/discovered alternate site for normal Phase 1 runs. If this exact site/library is unavailable to the native SharePoint tool, stop with `setup_incomplete`.
 
 ## Final Run ID
 
