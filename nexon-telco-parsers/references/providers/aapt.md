@@ -1,22 +1,16 @@
-# AAPT Provider Notes
+# AAPT Provider Runtime Notes
 
-Adapter path: `scripts/provider_adapters/aapt/`
+Adapter boundary: `scripts/provider_adapters/aapt/`
 
-Current source: `aapt_invoice`
+## Accepted Input
 
-Current function mapping: `accountReconV2/readAAPTInvoice`
+- AAPT invoice ZIP packages.
+- Record files: `rec001`, `rec005`, `rec002`, `rec006`, `rec010`, and `rec004`.
 
-Observed source file families: `.zip`, `.xlsx`, `.pdf`, `.xls`.
+## Parser Rules
 
-Observed SharePoint archive patterns:
-
-- `/Recon/AAPT/<year>/<month>/<run-timestamp>/Invoice`
-- `/Recon/AAPT/<year>/<month>/<run-timestamp>/ProcessOutput`
-- historical variants include `Invoices`, `Process_Output`, `Process Output`, `Old`, `New`, `IDK`, and `Disputes`.
-
-Known behavior/gates:
-
-- AAPT is ZIP-heavy in run evidence.
-- Current output commonly lands as `ProcessOutput/result.xlsx`.
-- Parser must preserve provider account/run folder evidence when present.
-- Do not implement guessed column mappings. Record evidence in the migration matrix before marking complete.
+- Fail closed when required ZIP members cannot be parsed.
+- Preserve provider account, service, source file, and source row/page/sheet traceability when present.
+- Required compatibility rule for account `2000060308`: `rec002` usage rows are grouped by `Origin[:-2]` before output.
+- Required compatibility rule for `rec004`: account-level charges use service id `10000`.
+- Do not add guessed column mappings or infer missing invoice rows.

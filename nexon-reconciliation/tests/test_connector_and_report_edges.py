@@ -216,7 +216,7 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
             )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("Excluded Phase 1 columns", result.stderr + result.stdout)
+        self.assertIn("Excluded runtime columns", result.stderr + result.stdout)
 
     def test_report_column_helpers_drop_excluded_columns_and_default_review_fields(self) -> None:
         columns = ordered_columns([{"line_id": "1", "agent_notes": "drop", "custom": "keep"}], ["line_id"])

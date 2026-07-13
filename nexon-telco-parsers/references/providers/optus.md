@@ -1,33 +1,20 @@
-# Optus Provider Notes
+# Optus Provider Runtime Notes
 
-Adapter path: `scripts/provider_adapters/optus/`
+Adapter boundary: `scripts/provider_adapters/optus/`
 
-Current source: `optus_invoice`
+## Accepted Input
 
-Current function mappings:
+- Optus PDF invoice packages.
+- Optus voice ZIP/DAT packages.
 
-- `accountReconV2/readOptusPDFInvoice`
-- `accountReconV2/readOptusExcelInvoice`
+## Parser Rules
 
-Observed source file families: `.xlsx`, `.zip`, `.pdf`.
-
-Observed SharePoint archive patterns:
-
-- `/Recon/Optus/<year>/<month>/<run-timestamp>/Invoice`
-- `/Recon/Optus/<year>/<month>/<run-timestamp>/ProcessOutput`
-- `/Recon/Optus/OptusVoice/<run-timestamp>/Invoice`
-- `/Recon/Optus/OptusVoice/<run-timestamp>/ProcessOutput`
-
-Known behavior/gates:
-
-- Preserve separate PDF and Excel/voice parser branches.
-- Mixed PDF and non-PDF packages must be split into separate runs.
-- Voice path evidence includes `OptusVoice` folders.
-- Current output commonly lands as `ProcessOutput/result.xlsx` or voice branch output.
-- Do not implement guessed column mappings. Record evidence in the migration matrix before marking complete.
-Optus preserves two parser routes:
-
-- `parser_pdf.py`
-- `parser_excel_voice.py`
-
-Mixed PDF and non-PDF packages must be split into separate runs. Do not merge the two extraction paths unless migration evidence proves the current system has converged them.
+- Preserve separate PDF and Excel/voice parser branches under one provider.
+- The runtime provider name is `Optus`; `OptusVoice` is not a provider name.
+- PDF-only packages use the `optus_pdf` parser key.
+- Non-PDF voice/Excel packages use the `optus_excel_voice` parser key.
+- Mixed PDF and non-PDF packages fail as ambiguous; do not split them automatically during a normal run.
+- Summary-only PDFs with no service line rows fail closed rather than inventing rows.
+- Voice packages parse `SRVS` service rows and `WUSG` withdrawn-usage rows.
+- Preserve provider account, service, source file, and source row/page/sheet traceability when present.
+- Do not add guessed column mappings or infer missing invoice rows.

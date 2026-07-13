@@ -1,21 +1,14 @@
-# Megaport Provider Notes
+# Megaport Provider Runtime Notes
 
-Adapter path: `scripts/provider_adapters/megaport/`
+Adapter boundary: `scripts/provider_adapters/megaport/`
 
-Current source: `megaport_invoice`
+## Accepted Input
 
-Current function mapping: `accountReconV2/readMegaportInvoice`
+- Megaport invoice CSV files.
 
-Observed source file families: `.csv`, `.xlsx`, `.pdf`.
+## Parser Rules
 
-Observed SharePoint archive patterns:
-
-- `/Recon/Megaport/<year>/<month>/<run-timestamp>/Invoice`
-- `/Recon/Megaport/<year>/<month>/<run-timestamp>/ProcessOutput`
-- historical variants include `Process_Output` and `Final Report`.
-
-Known behavior/gates:
-
-- Preserve service id/account trace fields from CSV/PDF/XLSX inputs when present.
-- Current output commonly lands as `ProcessOutput/result.xlsx`.
-- Do not implement guessed column mappings. Record evidence in the migration matrix before marking complete.
+- Derive billing period dates from the invoice date's previous month, not row-level `From`/`To` columns.
+- Fail closed for PDF, XLSX, or unrecognized CSV layouts unless a supported adapter is added.
+- Preserve provider account, service, source file, and source row/page/sheet traceability when present.
+- Do not add guessed column mappings or infer missing invoice rows.

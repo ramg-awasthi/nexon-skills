@@ -71,7 +71,7 @@ def main() -> int:
     if len(raw_input_rows) != len(refined_input_rows):
         raise RuntimeError("Raw and refined report inputs must have the same row count.")
     if any(EXCLUDED_PHASE1_COLUMNS.intersection(row.keys()) for row in refined_input_rows + raw_input_rows):
-        raise RuntimeError("Excluded Phase 1 columns leaked into refined report schema.")
+        raise RuntimeError("Excluded runtime columns leaked into refined report schema.")
     raw_columns = ordered_columns(raw_input_rows, BASE_COLUMNS)
     refined_rows = with_refined_defaults(refined_input_rows)
     refined_columns = ordered_columns(refined_rows, raw_columns + APPROVED_REFINED_COLUMNS)

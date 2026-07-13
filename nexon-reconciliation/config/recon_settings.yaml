@@ -33,4 +33,4 @@ failure_handling:
   notification_content: text_only
 
 db_update_policy:
-  allow_deferred_without_invoice_number: true
+  allow_deferred_without_invoice_number: false

@@ -6,7 +6,7 @@ Authoritative setup details live in `../../../docs/ACCESS_SETUP.md`.
 
 Use the native LangSmith SharePoint tool for SharePoint upload/result access. Do not use a runtime profile, browser profile, Graph wrapper script, or model-driven UI operation for normal SharePoint file movement.
 
-The only approved Phase 1 production storage target is:
+The only approved production storage target is:
 
 ```text
 Site: Nexon Reconciliation Automation
@@ -59,11 +59,11 @@ Billing/Inomial:
 
 Provider invoices:
 
-1. Provider API adapter where available.
+1. Provider API adapter where configured and approved.
 2. Manual SharePoint upload through the native SharePoint tool.
-3. Provider portal/browser access is not a normal reconciliation intake mode. Use it only as a separately approved acquisition fallback to place a provider package into the manual SharePoint upload folder; the supervisor still runs the package as `manual_upload`.
+3. Provider portal/browser access is not a normal reconciliation intake mode. Use it only as a separately approved acquisition fallback recorded in the run manifest to place a provider package into the manual SharePoint upload folder; the supervisor still runs the package as `manual_upload`.
 
 Failure notifications:
 
 1. Native Outlook Send Email tool for text-only messages.
-2. No attachments in the Phase 1 notification path.
+2. No attachments in the notification path.

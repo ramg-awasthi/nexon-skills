@@ -76,7 +76,7 @@ def main() -> int:
     config = load_config(args.config)
     enabled = config.get("features", {}).get("db_update_enabled") is True
     if not enabled:
-        raise RuntimeError("DB update is disabled. Default Phase 1 mode is report-only.")
+        raise RuntimeError("DB update is disabled. Default runtime mode is report-only.")
     if not args.approved_change_ticket:
         raise RuntimeError("DB update requires an approved change ticket.")
     if not args.dry_run:

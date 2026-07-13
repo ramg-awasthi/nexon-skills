@@ -1,21 +1,25 @@
-# Operating Contract
+# Runtime Operating Contract
 
 ## Scope
 
-Phase 1 supports:
+The runtime supports:
 
 - Manual SharePoint upload intake.
 - Provider API intake where credentials/endpoints exist.
 - AAPT, Telstra, Optus, Vocus, Megaport, Equinix.
 - ZIP and multi-file handling.
-- Deterministic provider parsing.
-- Read-only billing lookup.
+- Deterministic provider parsing through approved provider adapters.
+- Read-only billing lookup for normal reconciliation.
 - Deterministic matching.
 - Agent-assisted exception investigation.
 - Raw and refined reports.
 - Run manifests, logs, and evidence.
 
-## Out Of Scope By Default
+Supported parser inputs are AAPT ZIP, Telstra CSV, Optus PDF, Optus voice ZIP/DAT, Vocus CSV, Megaport CSV, and Equinix XLSX. A normal run must stop with `parser_unavailable` when required parser libraries are unavailable, the package is malformed, or the selected source format is unsupported.
+
+Normal reconciliation requires billing evidence. If read-only billing lookup is disabled or unavailable, stop with `billing_query_not_available`; parser-only validation is not a full reconciliation run and must not produce customer-match reports.
+
+## Not Allowed By Default
 
 - Automatic DB update.
 - Business Central posting.
@@ -35,7 +39,7 @@ Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
 Library: Shared Documents
 ```
 
-The old personal OneDrive `Recon` folder and the previously discovered `Account Recon` site are reference/legacy locations only, not normal Phase 1 runtime targets.
+The old personal OneDrive `Recon` folder and the previously discovered `Account Recon` site are not runtime targets. Do not read from or write to them during normal runs unless the user explicitly approves an investigation.
 
 Users upload to:
 
@@ -68,7 +72,7 @@ If a normal run cannot confirm folders, resolve a single source package, unpack 
 
 ## Report Columns
 
-The refined report must preserve every raw/report field produced by the parser and matcher, then append the approved Phase 1 columns below. Raw fields must not be dropped just because the refined report adds agent or human review fields.
+The refined report must preserve every raw/report field produced by the parser and matcher, then append the approved runtime columns below. Raw fields must not be dropped just because the refined report adds agent or human review fields.
 
 Do not remove base fields.
 
@@ -91,7 +95,7 @@ Approved refined added columns:
 - `human_verified_at`
 - `human_verified_invoice_number`
 
-Excluded in Phase 1:
+Excluded from the refined report schema:
 
 - `agent_confidence_score`
 - `agent_reason_code`
@@ -101,7 +105,7 @@ Excluded in Phase 1:
 
 `human_verified_status=verified` means the reviewer is asserting a complete match. It requires `human_verified_invoice_number`.
 
-`human_verified_status=deferred` means the reviewer is preserving a partial/incomplete review state. It may leave `human_verified_invoice_number` blank. Future DB update mode should write this as a partial/deferred update, not as a completed verified match, so the database remains aligned with the report state without overstating certainty.
+`human_verified_status=deferred` means the reviewer is preserving a partial/incomplete review state. It may leave `human_verified_invoice_number` blank in the report. Deferred rows are report-only in the current runtime and are not eligible for a future DB update unless Nexon separately approves explicit update semantics for blank-invoice deferred rows.
 
 `human_verified_status=not_reviewed` is report-only and should not produce a DB update row.
 

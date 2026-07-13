@@ -1,23 +1,14 @@
-# Telstra Provider Notes
+# Telstra Provider Runtime Notes
 
-Adapter path: `scripts/provider_adapters/telstra/`
+Adapter boundary: `scripts/provider_adapters/telstra/`
 
-Current source: `telstra_invoice`
+## Accepted Input
 
-Current function mapping: `accountReconV2/readTelstraInvoice`
+- Telstra detail report CSV files.
 
-Observed source file families: `.csv`, `.xlsx`, `.pdf`.
+## Parser Rules
 
-Observed SharePoint archive patterns:
-
-- `/Recon/Telstra/<year>/<month>/<account-or-service>/Invoice`
-- `/Recon/Telstra/<year>/<month>/<account-or-service>/ProcessOutput`
-- historical variants include `Process_Output`, `Output`, `Output_Process`, `Not sure`, and account folders such as `1436132800`.
-
-Known behavior/gates:
-
-- Run evidence includes Telstra `detail_report (*.csv)`.
-- Current failure path can require a file ending with `rec005.csv`.
-- DataPrep timeout failures were observed in April 2026 runs.
-- Current output commonly lands as `ProcessOutput/result.xlsx`.
-- Do not implement guessed column mappings. Record evidence in the migration matrix before marking complete.
+- Parse supported legacy/current Telstra CSV shapes through deterministic column handling.
+- Fail closed for PDF, XLSX, or unrecognized CSV layouts unless a supported adapter is added.
+- Preserve provider account, service, source file, and source row/page/sheet traceability when present.
+- Do not add guessed column mappings or infer missing invoice rows.

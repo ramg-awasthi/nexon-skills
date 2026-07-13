@@ -1,22 +1,15 @@
-# Vocus Provider Notes
+# Vocus Provider Runtime Notes
 
-Adapter path: `scripts/provider_adapters/vocus/`
+Adapter boundary: `scripts/provider_adapters/vocus/`
 
-Current source: `vocus_invoice`
+## Accepted Input
 
-Current function mapping: `accountReconV2/readVocusInvoice`
+- Vocus invoice CSV files.
 
-Observed source file families: `.csv`, `.xlsx`, `.pdf`.
+## Parser Rules
 
-Observed SharePoint archive patterns:
-
-- `/Recon/Vocus/<year>/<month>/<account-or-service>/Invoice`
-- `/Recon/Vocus/<year>/<month>/<account-or-service>/ProcessOutput`
-- direct account folders include `CN10712`, `CN11439`, `CN200`, and `Other accounts`.
-
-Known behavior/gates:
-
-- Current failure path can require a file ending with `rec005.csv`.
-- `CN*` folder/account meaning remains owner-confirmation territory.
-- Current output commonly lands as `ProcessOutput/result.xlsx`.
-- Do not implement guessed column mappings. Record evidence in the migration matrix before marking complete.
+- Derive billing period dates from invoice issue month, not row-level charge period columns.
+- Treat `CN*` folder/account labels as trace fields only unless explicit owner-confirmed account semantics are supplied.
+- Fail closed for PDF, XLSX, or unrecognized CSV layouts unless a supported adapter is added.
+- Preserve provider account, service, source file, and source row/page/sheet traceability when present.
+- Do not add guessed column mappings or infer missing invoice rows.

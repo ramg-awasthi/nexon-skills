@@ -2,20 +2,20 @@
 
 Use this reference when enabling read-only Inomial/reconciliation billing lookup.
 
-## Evidence Boundary
+## Billing Source Boundary
 
-The current Logic Apps do not expose the SQL used by `accountReconV2/DataPrep` or `accountReconV2/InomialDataFeeder`. Function source and app settings were not accessible in discovery.
+Use only approved read-only billing sources for runtime lookup.
 
-Known evidence:
+Approved runtime source order:
 
-- Current reconciliation uses daily extracted Inomial data in the reconciliation database.
-- Named extract tables include `inomialServiceMetaData` and `inomialTransactionData`.
-- Matching uses service ID, carrier/provider, and billing period/date.
-- Direct Inomial PostgreSQL is possible if Nexon supplies read-only credentials, but the current Logic App path appears to prefer a daily replica for stable historical reporting.
+1. Reconciliation database tables populated from Inomial daily extracts.
+2. Direct Inomial PostgreSQL only when Nexon supplies approved read-only credentials.
+
+Known extract table names include `inomialServiceMetaData` and `inomialTransactionData`. Matching evidence should use service ID, carrier/provider, and billing period/date fields when available.
 
 ## Runtime Contract
 
-`scripts/billing_query.py` is the only Phase 1 billing lookup script.
+`scripts/billing_query.py` is the only runtime billing lookup script.
 
 It must:
 
@@ -56,7 +56,7 @@ Allowed SQL shape:
 
 The adapter still relies on read-only credentials as a second guardrail. The SQL shape check protects against accidental unsafe SQL but is not a substitute for read-only database roles.
 
-## Candidate Output
+## Billing Evidence Output
 
 The query output should return as many of these columns as possible:
 
@@ -88,7 +88,7 @@ If the boolean evidence fields are not returned, `billing_query.py` derives cons
 
 Supported modes:
 
-- `NEXON_RECON_BILLING_MODE=sqlite` for local/golden tests.
+- `NEXON_RECON_BILLING_MODE=sqlite` for local fixture tests.
 - `NEXON_RECON_BILLING_MODE=postgres` for direct PostgreSQL/Inomial-style access.
 
 Set `NEXON_RECON_BILLING_DSN` in the runtime profile. Do not store DSNs or passwords in prompts, docs, logs, manifests, or reports.

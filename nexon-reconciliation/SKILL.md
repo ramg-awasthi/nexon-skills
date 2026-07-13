@@ -1,6 +1,6 @@
 ---
 name: nexon-reconciliation
-description: Operate the Nexon Phase 1 reconciliation workflow for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using configured deterministic adapters and the dedicated Nexon Reconciliation Automation SharePoint site. Use when intaking invoices from SharePoint upload, creating run folders, calling deterministic telco parsers, querying approved read-only billing evidence, matching, producing raw/refined reports, validating runs, or coordinating exception investigation.
+description: Operate the Nexon reconciliation workflow for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using deterministic parser contracts and the dedicated Nexon Reconciliation Automation SharePoint site. Use when intaking invoices from SharePoint upload, creating run folders, calling supported deterministic telco parsers, querying approved read-only billing evidence, matching, producing raw/refined reports, validating runs, or coordinating exception investigation.
 ---
 
 # Nexon Reconciliation
@@ -10,7 +10,7 @@ Use this skill for Nexon reconciliation runtime orchestration.
 ## Non-Negotiable Rules
 
 - Use the native SharePoint tool for SharePoint upload/result access and deterministic scripts for local staging, ZIP extraction, billing lookup, matching, report writing, validation, and any optional DB update.
-- Use only the dedicated SharePoint site `Nexon Reconciliation Automation` at `https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation` for Phase 1 upload/result storage.
+- Use only the dedicated SharePoint site `Nexon Reconciliation Automation` at `https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation` for upload/result storage.
 - Use `nexon-telco-parsers` for invoice extraction.
 - Do not parse invoices with free-form model reasoning.
 - Do not invent invoice rows.
@@ -22,7 +22,7 @@ Use this skill for Nexon reconciliation runtime orchestration.
 
 ## Production Storage Target
 
-The active Phase 1 storage target is:
+The active runtime storage target is:
 
 ```text
 Site: Nexon Reconciliation Automation
@@ -32,7 +32,7 @@ Browser URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation/
 Tool: native LangSmith SharePoint tool
 ```
 
-Do not use the old personal OneDrive `Recon` folder, the previously discovered `Account Recon` site, or any searched/discovered alternate site for normal Phase 1 runs. If this exact site/library is unavailable to the native SharePoint tool, stop with `setup_incomplete`.
+Do not use the old personal OneDrive `Recon` folder, the previously discovered `Account Recon` site, or any searched/discovered alternate site for normal runs. If this exact site/library is unavailable to the native SharePoint tool, stop with `setup_incomplete`.
 
 ## Final Run ID
 
@@ -49,7 +49,9 @@ Rules:
 - `hash5` is first five uppercase SHA-256 hex characters from provider, source checksum or provider API invoice id, and run timestamp.
 - Write full checksum, timezone, source file names, API invoice ids, and collision handling to `manifest/run_manifest.json`.
 
-## Phase 1 Flow
+## Reconciliation Run Flow
+
+Supported parser inputs are AAPT ZIP, Telstra CSV, Optus PDF, Optus voice ZIP/DAT, Vocus CSV, Megaport CSV, and Equinix XLSX. If a provider adapter returns `parser_unavailable` for a missing library, malformed package, or unsupported format, stop with a controlled failure; do not treat hand-authored normalized rows as an invoice parser result.
 
 1. Run setup preflight. Do not create root folders during normal runs.
 2. Use the native SharePoint tool or an enabled provider API adapter to resolve exactly one provider package.
@@ -57,7 +59,7 @@ Rules:
 4. Move or store source package under `source/`.
 5. Safely extract archives under `extracted/`.
 6. Parse provider invoice lines by calling sibling skill `../nexon-telco-parsers/scripts/parse_provider_invoice.py`.
-7. Query billing candidates through `billing_query.py` only when read-only SQL mode is enabled and the SQL passes agent guardrails plus script validation.
+7. For a normal reconciliation run, query billing candidates through `billing_query.py`. If billing lookup is disabled or unavailable, stop with `billing_query_not_available`; parser-only validation must use `nexon-telco-parsers` and must not produce customer-match reports.
 8. Run deterministic matching.
 9. Write raw reconciliation report.
 10. Send only unresolved rows to exception investigation.
@@ -96,7 +98,7 @@ These top-level files are stable wrappers. Shared implementation lives in `scrip
 - Keep shared deterministic behavior in `scripts/recon_core/`.
 - Keep provider-specific invoice extraction in `../nexon-telco-parsers/scripts/provider_adapters/<provider>/`.
 - Keep provider-specific notes in `../nexon-telco-parsers/references/providers/<provider>.md`.
-- Use exactly two skills for Phase 1: `nexon-reconciliation` and `nexon-telco-parsers`.
+- Use exactly two runtime skills: `nexon-reconciliation` and `nexon-telco-parsers`.
 - Do not move provider parser rules into this file.
 
 ## Runtime References
@@ -108,8 +110,8 @@ These top-level files are stable wrappers. Shared implementation lives in `scrip
 - Read `../../docs/PROVIDER_API_RESEARCH.md` before changing provider API statuses.
 - Read `../nexon-telco-parsers/SKILL.md` when parser routing or provider adapter behavior is needed.
 
-## Integration Gates
+## Runtime Integration Boundaries
 
 Provider API download and billing lookup must use approved adapters, credentials, and deterministic scripts. If the required adapter, credentials, parser, or read-only SQL path is unavailable, stop with `integration_unavailable`. Parser internals belong to `nexon-telco-parsers`. Do not replace missing implementation with guesses.
 
-Billing lookup follows the current Logic App evidence path as closely as possible: use the reconciliation DB/Inomial daily extract tables when available. Agent-authored SQL is allowed only in `billing.mode=read_only_sql`, must be read-only before script execution, is validated again by `billing_query.py`, and must produce an audit query log.
+Billing lookup must use the approved reconciliation DB/Inomial extract path when configured; otherwise stop with `integration_unavailable`. Agent-authored SQL is allowed only in `billing.mode=read_only_sql`, must be read-only before script execution, is validated again by `billing_query.py`, and must produce an audit query log.

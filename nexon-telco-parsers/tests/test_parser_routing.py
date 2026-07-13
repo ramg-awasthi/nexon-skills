@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ PACK_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from parser_core.parse_provider_invoice import PARSER_MODULES, select_parser  # noqa: E402
+from parser_core.parse_provider_invoice import PARSER_MODULES, PROVIDER_PARSER_KEYS, select_parser  # noqa: E402
 
 
 class ParserRoutingTests(unittest.TestCase):
@@ -29,10 +30,62 @@ class ParserRoutingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_parser("Optus", [Path("invoice.pdf"), Path("voice.xlsx")])
 
+    def test_optus_empty_package_fails_before_branch_selection(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no source files"):
+            select_parser("Optus", [])
+
+    def test_optus_voice_is_not_a_provider_name(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Provider is not supported"):
+            select_parser("OptusVoice", [Path("voice.dat")])
+
     def test_parser_modules_route_to_provider_adapters(self) -> None:
-        self.assertEqual("provider_adapters.aapt.parser", PARSER_MODULES["aapt"])
-        self.assertEqual("provider_adapters.optus.parser_pdf", PARSER_MODULES["optus_pdf"])
-        self.assertEqual("provider_adapters.optus.parser_excel_voice", PARSER_MODULES["optus_excel_voice"])
+        self.assertEqual(
+            {
+                "aapt": "provider_adapters.aapt.parser",
+                "telstra": "provider_adapters.telstra.parser",
+                "optus_pdf": "provider_adapters.optus.parser_pdf",
+                "optus_excel_voice": "provider_adapters.optus.parser_excel_voice",
+                "vocus": "provider_adapters.vocus.parser",
+                "megaport": "provider_adapters.megaport.parser",
+                "equinix": "provider_adapters.equinix.parser",
+            },
+            PARSER_MODULES,
+        )
+
+    def test_provider_parser_key_registry_is_complete(self) -> None:
+        self.assertEqual(
+            {
+                "AAPT": "aapt",
+                "Telstra": "telstra",
+                "Vocus": "vocus",
+                "Megaport": "megaport",
+                "Equinix": "equinix",
+            },
+            PROVIDER_PARSER_KEYS,
+        )
+        for parser_key in PROVIDER_PARSER_KEYS.values():
+            self.assertIn(parser_key, PARSER_MODULES)
+
+    def test_optus_is_one_provider_with_two_isolated_parser_branches(self) -> None:
+        self.assertNotIn("Optus", PROVIDER_PARSER_KEYS)
+        self.assertEqual(
+            {
+                "optus_pdf": "provider_adapters.optus.parser_pdf",
+                "optus_excel_voice": "provider_adapters.optus.parser_excel_voice",
+            },
+            {
+                parser_key: module_name
+                for parser_key, module_name in PARSER_MODULES.items()
+                if module_name.startswith("provider_adapters.optus.")
+            },
+        )
+
+    def test_parser_modules_are_importable_adapter_modules(self) -> None:
+        for parser_key, module_name in PARSER_MODULES.items():
+            with self.subTest(parser_key=parser_key):
+                self.assertTrue(module_name.startswith("provider_adapters."))
+                module = importlib.import_module(module_name)
+                self.assertTrue(callable(module.parse))
 
     def test_cli_default_config_resolves_from_pack_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

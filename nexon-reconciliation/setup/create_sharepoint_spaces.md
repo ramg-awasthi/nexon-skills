@@ -13,7 +13,7 @@ Library: Shared Documents
 Browser URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation/Shared%20Documents/Forms/AllItems.aspx
 ```
 
-Do not create or use these Phase 1 folders in the old personal OneDrive `Recon` folder, the `Account Recon` site, or any other searched/discovered SharePoint location.
+Do not create or use these runtime folders in the old personal OneDrive `Recon` folder, the `Account Recon` site, or any other searched/discovered SharePoint location.
 
 Create upload folders:
 
@@ -45,7 +45,7 @@ Create result roots:
 - Applied/service account can move/copy uploaded source packages.
 - Applied/service account can create result year/month/run folders.
 - Applied/service account can write reports, evidence, logs, and manifests.
-- Human reviewers can read refined reports and write approved review copies where required.
+- Human reviewers can read refined reports and write review copies only in the configured reviewer output location when that workflow is enabled.
 
 ## Secrets And Profiles
 

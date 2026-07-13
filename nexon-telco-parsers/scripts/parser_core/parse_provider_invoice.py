@@ -28,6 +28,8 @@ PROVIDER_PARSER_KEYS = {
 
 def select_parser(provider: str, source_files: list[Path]) -> str:
     if provider == "Optus":
+        if not source_files:
+            raise ValueError("Optus package has no source files.")
         has_pdf = any(path.suffix.lower() == ".pdf" for path in source_files)
         has_non_pdf = any(path.suffix.lower() != ".pdf" for path in source_files)
         if has_pdf and has_non_pdf:
@@ -81,6 +83,30 @@ def main() -> int:
     except (NotImplementedError, ValueError) as exc:
         write_json(args.output, {"headers": [], "lines": []})
         write_json(args.warnings, [{"severity": "error", "message": str(exc), "parser": locals().get("parser_key")}])
+        if args.manifest:
+            write_json(
+                args.manifest,
+                {
+                    "provider": args.provider,
+                    "run_id": args.run_id,
+                    "parser": locals().get("parser_key"),
+                    "source_file_count": len(source_files),
+                    "status": "parser_warning",
+                },
+            )
+        return 3
+    except Exception as exc:
+        write_json(args.output, {"headers": [], "lines": []})
+        write_json(
+            args.warnings,
+            [
+                {
+                    "severity": "error",
+                    "message": f"parser_failed: unexpected parser error ({type(exc).__name__})",
+                    "parser": locals().get("parser_key"),
+                }
+            ],
+        )
         if args.manifest:
             write_json(
                 args.manifest,
