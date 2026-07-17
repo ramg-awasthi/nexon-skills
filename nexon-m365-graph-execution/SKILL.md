@@ -1,6 +1,6 @@
 ---
 name: nexon-m365-graph-execution
-description: Perform the Microsoft side of one claimed Nexon M365 ticket through controlled preflight, execution, or verification-only handling. Use when the fixed m365-execution subagent must determine conditional risk, validate a bounded execution envelope, authenticate to the tenant_id supplied by the approved CMDB workflow, invoke one immutable-registry handler, verify the end state, or return sanitized evidence.
+description: Perform the Microsoft side of one ticket-bound Nexon M365 request through controlled preflight, claimed execution, or verification-only handling. Use when the fixed m365-execution subagent must determine conditional risk, validate a bounded execution envelope, authenticate to the tenant_id supplied by the authoritative CMDB workflow, invoke one immutable-registry handler, verify the end state, or return sanitized evidence.
 ---
 
 # Nexon M365 Graph Execution
