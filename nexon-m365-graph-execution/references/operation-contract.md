@@ -35,7 +35,18 @@ Until a complete handler is approved and installed:
 - Never accept an allowlist, handler name, or registry path from ticket-run input.
 - Return `UNSUPPORTED_OPERATION` before authentication or write.
 - Do not generate a handler during a ticket run.
-- Do not use arbitrary `Invoke-MgGraphRequest`, Graph URLs, request bodies, PowerShell, or shell as a substitute.
+- Do not use arbitrary Graph clients, Graph URLs, request bodies, Python, or shell as a substitute.
+
+## Locked runtime and authentication boundary
+
+- Use controlled Python handlers with direct Microsoft Graph REST calls.
+- Use only `https://login.microsoftonline.com` for token acquisition, `https://graph.microsoft.com` for Graph, API version `v1.0`, and scope `https://graph.microsoft.com/.default` as immutable code constants.
+- Use Workspace Secret `NEXON_M365_CLIENT_BASIC_CREDENTIAL` only through computer Access profile `nexon-m365-graph-access` and its injected Basic authorization header for `login.microsoftonline.com`.
+- Treat the Workspace Secret as a proxy source, not an environment variable or script input.
+- Take `tenant_id` only from the validated execution envelope and use it only as the tenant-specific token-endpoint path segment.
+- Keep the returned access token in process memory only and never print, persist, return, trace, or pass it on a command line.
+- Do not install or invoke PowerShell or the Microsoft Graph PowerShell SDK.
+- Do not add `runtime-config.json` or read client ID, client secret, authentication mode, authority host, Graph base URI, runtime version, or tenant ID from runtime environment variables.
 
 ## Handler requirements
 
@@ -65,7 +76,7 @@ Register each approved handler in `operation-registry.json` with its target type
 
 Before a write:
 
-1. Authenticate the approved multi-tenant application to the CMDB tenant GUID through the approved Workspace Secret/Connection and computer Access profile configuration.
+1. Authenticate the approved multi-tenant application to the CMDB tenant GUID through Workspace Secret `NEXON_M365_CLIENT_BASIC_CREDENTIAL` and computer Access profile `nexon-m365-graph-access`.
 2. Confirm the Microsoft Graph context is app-only.
 3. Compare the connected context tenant with the CMDB tenant GUID.
 4. Query the connected organization and independently compare its tenant identity with the CMDB tenant GUID.
@@ -92,7 +103,7 @@ Use process-scoped authentication and clear it after each ticket. Never place cr
 - Query the ending state independently of the write response.
 - Compare only the operation-defined normalized fields.
 - Use bounded read-only retries only when the operation contract permits eventual consistency.
-- Treat `2xx`, SDK success, and process exit code as insufficient without an observed match.
+- Treat HTTP status, response body, and process exit code as insufficient without an observed match.
 - Return failed/inconclusive when the state cannot be proven.
 
 ## Permission rules
