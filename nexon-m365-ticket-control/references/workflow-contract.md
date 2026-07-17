@@ -58,19 +58,25 @@ Require one customer, target, and operation. Block execution for a non-empty `mi
 
 ## Execution envelope
 
-Pass only this bounded structure to the controlled operation layer:
+Pass only this bounded structure to the fixed `m365-execution` subagent. Keep it aligned with the Graph-execution skill's authoritative execution-envelope contract:
 
 ```json
 {
-  "ticket_sys_id": "service-now-sys-id",
+  "mode": "execute",
+  "ticket_sys_id": "0123456789abcdef0123456789abcdef",
   "correlation_id": "run-correlation-id",
-  "tenant_id": "tenant-guid",
+  "attempt_id": "attempt-id",
+  "tenant_id": "11111111-1111-1111-1111-111111111111",
   "target_type": "user",
-  "target_id": "m365-object-guid",
-  "operation": "supported-operation-name",
+  "target_id": "22222222-2222-2222-2222-222222222222",
+  "operation": "disable-user",
   "parameters": {},
-  "intended_state": {},
-  "risk": "standard-or-high"
+  "intended_state": { "account_enabled": false },
+  "risk": "high",
+  "plan_fingerprint": "versioned-sha256-plan-fingerprint",
+  "approval_entry_id": "immutable-approval-entry-id",
+  "claim_id": "servicenow-claim-id",
+  "claim_version": 7
 }
 ```
 
@@ -82,32 +88,39 @@ Accept only a normalized safe result:
 
 ```json
 {
-  "status": "verified-success-or-failed",
-  "write_attempted": false,
-  "tenant_assertion": "matched-or-not-matched-or-not-run",
-  "operation": "supported-operation-name",
-  "target_id": "m365-object-guid",
-  "starting_state": {},
+  "mode": "execute",
+  "status": "verified_success",
+  "write_attempted": "yes",
+  "tenant_assertion": "matched",
+  "ticket_sys_id": "0123456789abcdef0123456789abcdef",
+  "tenant_id": "11111111-1111-1111-1111-111111111111",
+  "operation": "disable-user",
+  "target_id": "22222222-2222-2222-2222-222222222222",
+  "starting_state": { "account_enabled": true },
+  "risk": "high",
+  "risk_evidence": {},
   "verification": {
-    "matched": false,
-    "observed_state": {},
-    "checked_at": "ISO-8601 timestamp"
+    "matched": true,
+    "observed_state": { "account_enabled": false },
+    "checked_at": "2026-07-16T12:00:00Z"
   },
-  "safe_error": {
-    "code": "SAFE_REASON_CODE",
-    "message": "safe bounded explanation"
-  },
-  "correlation_id": "run-correlation-id"
+  "safe_error": null,
+  "plan_fingerprint": "versioned-sha256-plan-fingerprint",
+  "approval_entry_id": "immutable-approval-entry-id",
+  "claim_id": "servicenow-claim-id",
+  "claim_version": 7,
+  "attempt_id": "attempt-id",
+  "correlation_id": "request-correlation-id"
 }
 ```
 
-Never return raw authentication exceptions, tokens, authorization headers, certificates, or unbounded Graph bodies.
+Allowed status values are `preflight_complete`, `verified_success`, `failed`, and `inconclusive`. Compare the returned ticket, mode, tenant, operation, target binding, plan fingerprint, approval entry, claim ID/version, attempt ID, and correlation ID with the request before any ServiceNow update. Require `status=verified_success`, `verification.matched=true`, a non-empty observed state, and a verification timestamp before successful closeout. Never accept raw authentication exceptions, tokens, authorization headers, certificates, or unbounded Graph bodies.
 
 ## Gate checklist
 
 Require all gates immediately before execution:
 
-- Ticket remains open, in scope, and assigned to Nia.
+- Ticket remains open, in scope, and assigned to the configured operational user represented by the Nia placeholder during UAT.
 - Ticket still maps to one customer, target, operation, and tenant.
 - RITM formal approval is current when applicable.
 - Current planned action exists.
