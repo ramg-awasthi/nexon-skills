@@ -189,15 +189,21 @@ catch {
 
 $errors = New-Object System.Collections.Generic.List[string]
 $topLevelProperties = @(
+    'mode',
     'ticket_sys_id',
     'correlation_id',
+    'attempt_id',
     'tenant_id',
     'target_type',
     'target_id',
     'operation',
     'parameters',
     'intended_state',
-    'risk'
+    'risk',
+    'plan_fingerprint',
+    'approval_entry_id',
+    'claim_id',
+    'claim_version'
 )
 
 if (-not (Test-PlainObject -Value $envelope)) {
@@ -218,6 +224,11 @@ else {
         }
     }
 
+    if ($null -ne $envelope.PSObject.Properties['mode'] -and
+        ($envelope.mode -isnot [string] -or [string]$envelope.mode -notin @('preflight', 'execute', 'verify_only'))) {
+        $errors.Add('mode must be preflight, execute, or verify_only.')
+    }
+
     if ($null -ne $envelope.PSObject.Properties['ticket_sys_id'] -and
         ($envelope.ticket_sys_id -isnot [string] -or [string]$envelope.ticket_sys_id -notmatch '^[0-9a-fA-F]{32}$')) {
         $errors.Add('ticket_sys_id must be a 32-character ServiceNow sys_id.')
@@ -232,8 +243,10 @@ else {
         $errors.Add('tenant_id must be a non-empty GUID.')
     }
 
-    if ($null -ne $envelope.PSObject.Properties['target_id'] -and -not (Test-GuidValue -Value $envelope.target_id)) {
-        $errors.Add('target_id must be a resolved non-empty GUID.')
+    if ($null -ne $envelope.PSObject.Properties['target_id'] -and
+        $null -ne $envelope.target_id -and
+        -not (Test-GuidValue -Value $envelope.target_id)) {
+        $errors.Add('target_id must be null or a resolved non-empty GUID.')
     }
 
     if ($null -ne $envelope.PSObject.Properties['target_type'] -and
@@ -247,8 +260,50 @@ else {
     }
 
     if ($null -ne $envelope.PSObject.Properties['risk'] -and
-        ($envelope.risk -isnot [string] -or [string]$envelope.risk -notin @('standard', 'high'))) {
-        $errors.Add('risk must be standard or high.')
+        ($envelope.risk -isnot [string] -or [string]$envelope.risk -notin @('standard', 'high', 'pending-preflight'))) {
+        $errors.Add('risk must be standard, high, or pending-preflight.')
+    }
+
+    $boundedIds = @('attempt_id', 'plan_fingerprint', 'approval_entry_id', 'claim_id')
+    foreach ($boundedId in $boundedIds) {
+        $property = $envelope.PSObject.Properties[$boundedId]
+        if ($null -ne $property -and $null -ne $property.Value -and
+            ($property.Value -isnot [string] -or [string]$property.Value -notmatch '^[A-Za-z0-9._:-]{1,256}$')) {
+            $errors.Add("$boundedId must be null or use the approved bounded character set and length.")
+        }
+    }
+
+    $claimVersionProperty = $envelope.PSObject.Properties['claim_version']
+    if ($null -ne $claimVersionProperty -and $null -ne $claimVersionProperty.Value -and
+        (($claimVersionProperty.Value -isnot [int] -and $claimVersionProperty.Value -isnot [long]) -or [long]$claimVersionProperty.Value -lt 0)) {
+        $errors.Add('claim_version must be null or a non-negative integer.')
+    }
+
+    if ($null -ne $envelope.PSObject.Properties['parameters'] -and -not (Test-PlainObject -Value $envelope.parameters)) {
+        $errors.Add('parameters must be one JSON object.')
+    }
+
+    if ($null -ne $envelope.PSObject.Properties['intended_state'] -and -not (Test-PlainObject -Value $envelope.intended_state)) {
+        $errors.Add('intended_state must be one JSON object.')
+    }
+
+    if ($envelope.mode -eq 'preflight') {
+        if ($envelope.risk -notin @('standard', 'high', 'pending-preflight')) {
+            $errors.Add('preflight risk is invalid.')
+        }
+    }
+    elseif ($envelope.mode -in @('execute', 'verify_only')) {
+        if ($envelope.risk -notin @('standard', 'high')) {
+            $errors.Add("$($envelope.mode) requires a final standard or high risk classification.")
+        }
+        foreach ($requiredExecutionId in @('attempt_id', 'plan_fingerprint', 'approval_entry_id', 'claim_id')) {
+            if ([string]::IsNullOrWhiteSpace([string]$envelope.PSObject.Properties[$requiredExecutionId].Value)) {
+                $errors.Add("$($envelope.mode) requires $requiredExecutionId.")
+            }
+        }
+        if ($null -eq $envelope.claim_version) {
+            $errors.Add("$($envelope.mode) requires a non-negative integer claim_version.")
+        }
     }
 
     foreach ($contentError in @(Find-ProhibitedContent -Value $envelope)) {
@@ -281,7 +336,17 @@ if ($errors.Count -eq 0) {
         if ([string]$operationContract.target_type -ne [string]$envelope.target_type) {
             $errors.Add('target_type does not match the approved operation contract.')
         }
-        if ([string]$operationContract.risk -ne [string]$envelope.risk) {
+        if ([string]$operationContract.target_lifecycle -notin @('existing', 'create')) {
+            $errors.Add('Approved operation contract has an invalid target_lifecycle.')
+        }
+        elseif ($envelope.mode -in @('execute', 'verify_only') -and [string]$operationContract.target_lifecycle -eq 'existing' -and
+            -not (Test-GuidValue -Value $envelope.target_id)) {
+            $errors.Add("$($envelope.mode) requires a resolved target_id GUID for an existing-target operation.")
+        }
+        elseif ($envelope.mode -eq 'execute' -and [string]$operationContract.target_lifecycle -eq 'create' -and $null -ne $envelope.target_id) {
+            $errors.Add('execute requires a null target_id before a create-target operation.')
+        }
+        if ($envelope.risk -ne 'pending-preflight' -and [string]$operationContract.risk -ne [string]$envelope.risk) {
             $errors.Add('risk does not match the approved operation contract.')
         }
         if ([string]::IsNullOrWhiteSpace([string]$operationContract.handler)) {

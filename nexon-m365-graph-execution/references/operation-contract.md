@@ -11,7 +11,22 @@
 
 ## Allowlist status
 
-The initial supported Microsoft 365 operation list is open. The current pack contains no authorized Graph write handler.
+The supplied use case confirms eight intended Microsoft 365 operations, but the current pack contains no authorized Graph write handler.
+
+| Intended operation | Supplied risk classification |
+|---|---|
+| Create user | Standard |
+| Assign user to group | Standard; high risk when the group is role-assignable |
+| Assign license | Standard |
+| Remove license | Standard; high risk when it deprovisions a mailbox |
+| Disable user or block sign-in | High risk |
+| Enable user | Standard |
+| Reset password | Standard; high risk for privileged accounts |
+| Grant an admin role or privilege | High risk |
+
+Treat this table as intended business scope, not as the executable allowlist. For conditional classifications, determine the condition from authoritative context before planning. If it cannot be determined unambiguously, stop rather than treating the operation as standard risk.
+
+The reset-password contract must define both an approved secret-safe delivery method and an objective verification method before implementation. Microsoft Graph does not expose the resulting password for read-back verification, so a successful response alone cannot satisfy this use case. Keep reset password unsupported unless an approved verifier can prove the intended end state without reading, returning, or recording the password.
 
 Until a complete handler is approved and installed:
 
@@ -27,12 +42,12 @@ Until a complete handler is approved and installed:
 Add an operation only when it has all of the following:
 
 1. Unique stable operation name.
-2. Supported target type.
+2. Supported target type and `target_lifecycle` of `existing` or `create`.
 3. Strict parameter schema.
 4. Exact intended-state schema.
 5. Risk classification.
 6. Required least-privilege Microsoft permissions.
-7. Read-only target resolver.
+7. Read-only target resolver, including exact non-existence checks and immutable create-key rules for create operations.
 8. Read-only starting-state query.
 9. Preflight and already-satisfied-state logic.
 10. Exactly one bounded write handler.
@@ -44,7 +59,7 @@ Add an operation only when it has all of the following:
 
 An incomplete handler is unsupported.
 
-Register each approved handler in `operation-registry.json` with its target type, risk, allowed and required parameter names, allowed and required intended-state names, bounded value types, and handler identifier. Review the registry and handler together. Unknown fields are denied.
+Register each approved handler in `operation-registry.json` with its target type, target lifecycle, risk, allowed and required parameter names, allowed and required intended-state names, bounded value types, and handler identifier. Review the registry and handler together. Unknown fields are denied.
 
 ## Connection guard
 
@@ -60,9 +75,11 @@ Use process-scoped authentication and clear it after each ticket. Never place cr
 
 ## Preflight and write rules
 
-- Recheck all ServiceNow gates before authentication.
-- Require a successful atomic ServiceNow execution claim before authentication.
+- The supervisor rechecks all authoritative ServiceNow gates and acquires the atomic execution claim immediately before handoff.
+- The execution component validates the bounded approval and claim binding fields but does not independently interpret or query ServiceNow approval.
 - Resolve the target only inside the CMDB tenant.
+- For an existing-target operation, require exactly one target GUID before execution.
+- For a create-target operation, prove that the exact immutable create identifier does not already exist before writing; zero or multiple matches during recovery are inconclusive.
 - Read the normalized starting state.
 - If starting state already equals intended state, make no write and perform verification.
 - Otherwise execute one handler once for one target.

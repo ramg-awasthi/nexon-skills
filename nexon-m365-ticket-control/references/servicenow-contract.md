@@ -56,6 +56,10 @@ For planned-action approval require:
 - Evidence that plan-relevant data did not change afterward.
 - Evidence that the approval has not already been consumed.
 
+Create a versioned SHA-256 plan fingerprint from a canonical representation of the ticket, customer, tenant, target binding or immutable create identifier, operation, parameters, intended state, and risk. Exclude secrets, timestamps, journal-entry IDs, and unstable display text so the fingerprint can be calculated before the planned-action note is written. Store the fingerprint in the planned-action note and durable automation state, and store the resulting note-entry ID separately. Any change to a fingerprint input invalidates the earlier approval.
+
+The approval must either reference the current plan fingerprint or unambiguously repeat the exact target, operation, and intended state from the current planned-action note. A generic approval such as “approved” is insufficient when it cannot be deterministically bound to the current plan.
+
 Neither an earlier generic approval nor a Teams reply satisfies the planned-action approval gate.
 
 ## Planned-action note
@@ -72,6 +76,7 @@ Operation: <exact operation>
 Intended end state: <exact state>
 Risk: <standard/high>
 Expected effect: <safe description>
+Plan fingerprint: <versioned-sha256-fingerprint>
 Approval required: explicit approval of this specific planned action by a designated approver.
 Correlation ID: <id>
 ```
