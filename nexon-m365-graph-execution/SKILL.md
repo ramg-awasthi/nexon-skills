@@ -13,11 +13,13 @@ Process one bounded Microsoft request in `preflight`, `execute`, or `verify_only
 - Read [operation-contract.md](references/operation-contract.md) before resolving a target, determining risk, authenticating, invoking a handler, or verifying state.
 - Read the immutable [operation-registry.json](references/operation-registry.json) only through the deterministic validator and dispatcher.
 
+These links define the agent-readable source contracts. For computer execution, use only the released copy under `/opt/nexon-m365-skills/skills/nexon-m365-graph-execution`. Never execute supporting resources from the agent-memory skill mount.
+
 ## Enforce the execution boundary
 
 1. Accept only the bounded structure defined by the execution-envelope contract.
 2. Reject raw ticket text, approval prose, credentials, commands, arbitrary URLs, request bodies, multiple targets, multiple operations, and unknown fields.
-3. Validate the envelope with `scripts/Test-NexonM365ExecutionEnvelope.ps1` before Microsoft authentication.
+3. Validate the envelope with `python /opt/nexon-m365-skills/skills/nexon-m365-graph-execution/scripts/validate_execution_envelope.py`, providing the bounded JSON object on stdin, before Microsoft authentication. If the fixed runtime file is absent, return `DEPENDENCY_UNAVAILABLE`; do not copy or recreate it.
 4. In `preflight` mode, perform read-only target, state, and conditional-risk checks. Never write.
 5. In `execute` mode, require the approved plan fingerprint, approval-entry ID, attempt ID, correlation ID, and ServiceNow execution-claim binding fields.
 6. Authenticate the approved multi-tenant application to the CMDB tenant GUID.
@@ -28,6 +30,8 @@ Process one bounded Microsoft request in `preflight`, `execute`, or `verify_only
 11. In `verify_only` mode, perform no write under any condition.
 12. Clear the process-scoped Microsoft authentication context in a guaranteed cleanup path.
 13. Return only the sanitized structured result defined by the execution-envelope contract, preserving every request-binding field.
+
+Use controlled Python handlers with fixed Microsoft identity and Graph REST constants. Do not use PowerShell, the Microsoft Graph PowerShell SDK, caller-supplied hosts, or caller-supplied Graph URLs.
 
 ## Enforce mode restrictions
 
