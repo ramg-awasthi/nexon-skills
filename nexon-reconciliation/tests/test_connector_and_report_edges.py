@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -34,6 +35,7 @@ provider_api_adapters:
 billing:
   mode: read_only_sql
   agent_sql_allowed: true
+  audit_required: true
 reports:
   evidence_summary:
     auto_matched: short
@@ -223,13 +225,19 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
         refined = with_refined_defaults([{"line_id": "1", "agent_match_status": "auto_matched"}])[0]
 
         self.assertEqual(["line_id", "custom"], columns)
-        self.assertEqual("false", refined["agent_review_required"])
+        self.assertFalse(refined["agent_review_required"])
         self.assertEqual("not_reviewed", refined["human_verified_status"])
 
     def test_billing_sql_helpers_validate_comments_and_modes(self) -> None:
-        billing_query._assert_read_only_sql("-- harmless\nselect * from candidates")
+        billing_query._assert_read_only_sql(
+            "-- harmless\nselect ServiceNumber as service_id, "
+            "SupplierName as provider, AccountNumber as provider_account, "
+            "BillingDate as transaction_date from Finance.GenericNexonBilling"
+        )
         with self.assertRaisesRegex(RuntimeError, "only one read-only statement"):
-            billing_query._assert_read_only_sql("select * from candidates; select * from other")
+            billing_query._assert_read_only_sql(
+                "select * from Finance.GenericNexonBilling; select * from Finance.GenericNexonBilling"
+            )
         with self.assertRaisesRegex(RuntimeError, "Enable approved"):
             billing_query._assert_billing_config({"features": {"billing_query_enabled": False}})
         with self.assertRaisesRegex(RuntimeError, "billing.mode"):
@@ -250,19 +258,11 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
 
     def test_exception_investigation_helpers_validate_payload_shape(self) -> None:
         self.assertEqual([{"line_id": "1"}], apply_exception_investigation._rows([{"line_id": "1"}]))
-        self.assertEqual("run|AAPT|file.csv|7|SVC-1", apply_exception_investigation._line_key(
-            {
-                "run_id": "run",
-                "provider": "AAPT",
-                "source_file": "file.csv",
-                "source_row": "7",
-                "service_id_raw": "SVC-1",
-            }
-        ))
+        self.assertEqual("line-1", apply_exception_investigation._line_key({"line_id": "line-1"}))
         self.assertEqual({}, apply_exception_investigation._validated_update({"line_id": "1"}))
         with self.assertRaisesRegex(RuntimeError, "row/update list"):
             apply_exception_investigation._rows({"payload": []})
-        with self.assertRaisesRegex(RuntimeError, "fallback source identity"):
+        with self.assertRaisesRegex(RuntimeError, "required line_id"):
             apply_exception_investigation._line_key({})
         with self.assertRaisesRegex(RuntimeError, "disallowed fields"):
             apply_exception_investigation._validated_update({"line_id": "1", "human_verified_status": "verified"})
@@ -411,6 +411,29 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
                 os.environ.pop("NEXON_RECON_GRAPH_ACCESS_TOKEN", None)
             else:
                 os.environ["NEXON_RECON_GRAPH_ACCESS_TOKEN"] = old_token
+
+    def test_sharepoint_client_credentials_token(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"access_token": "application-token"}'
+
+        env = {
+            "NEXON_RECON_SHAREPOINT_TENANT_ID": "tenant",
+            "NEXON_RECON_SHAREPOINT_CLIENT_ID": "client",
+            "NEXON_RECON_SHAREPOINT_CLIENT_SECRET": "secret",
+        }
+        with patch.dict(os.environ, env, clear=True), patch.object(
+            sharepoint_connector, "urlopen", return_value=FakeResponse()
+        ) as mocked:
+            self.assertEqual("application-token", sharepoint_connector._token())
+            request = mocked.call_args.args[0]
+            self.assertIn("/tenant/oauth2/v2.0/token", request.full_url)
 
     def test_sharepoint_graph_mode_commands_without_live_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

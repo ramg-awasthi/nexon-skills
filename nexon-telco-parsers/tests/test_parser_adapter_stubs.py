@@ -386,7 +386,20 @@ class ParserAdapterStubTests(unittest.TestCase):
                 parse_provider_invoice.importlib.import_module = lambda name: SimpleNamespace(
                     parse=lambda source_files, context: {
                         "headers": ["line_id"],
-                        "lines": [{"line_id": "line-1", "source_file_count": len(source_files), "parser_key": context["parser_key"]}],
+                        "invoice_headers": [{"invoice_identity": "invoice-1"}],
+                        "lines": [
+                            {
+                                "line_id": "line-1",
+                                "invoice_identity": "invoice-1",
+                                "source_file_count": len(source_files),
+                                "parser_key": context["parser_key"],
+                            }
+                        ],
+                        "accounting": {
+                            "source_rows_considered": 1,
+                            "parsed_rows": 1,
+                            "documented_exclusions": 0,
+                        },
                     }
                 )
                 sys.argv = [

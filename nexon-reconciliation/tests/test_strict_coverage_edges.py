@@ -3,6 +3,7 @@ from __future__ import annotations
 import builtins
 import contextlib
 import csv
+import hashlib
 import io
 import json
 import os
@@ -17,6 +18,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 
+from openpyxl import Workbook
+
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -25,7 +28,7 @@ from recon_core import apply_exception_investigation, billing_query, common, int
 from recon_core import notify_failure, optional_db_update, preflight_check, provider_api_download  # noqa: E402
 from recon_core import record_failure, safe_unpack, sharepoint_connector, validate_run  # noqa: E402
 from recon_core.common import APPROVED_REFINED_COLUMNS, EXCLUDED_PHASE1_COLUMNS, RUN_SUBDIRS, write_json  # noqa: E402
-from recon_core.write_reports import BASE_COLUMNS  # noqa: E402
+from recon_core.write_reports import BASE_COLUMNS, _write_workbook  # noqa: E402
 
 
 def call_main(module: object, argv: list[object]) -> int:
@@ -69,6 +72,7 @@ provider_api_adapters:
 {provider_api_adapters}billing:
   mode: read_only_sql
   agent_sql_allowed: true
+  audit_required: true
 reports:
   evidence_summary:
     auto_matched: short
@@ -105,21 +109,136 @@ def make_valid_run(root: Path, *, rows: list[dict[str, str]] | None = None, raw_
 
     if raw_count is None:
         raw_count = len(rows)
+    for index, row in enumerate(rows):
+        if not row.get("SupplierName"):
+            row["SupplierName"] = "AAPT"
+        if not row.get("InvoiceServiceNumber"):
+            row["InvoiceServiceNumber"] = f"SVC-{index + 1}"
 
-    write_json(run_root / "manifest" / "run_manifest.json", {"run_id": run_id, "db_update_enabled": False})
-    write_json(run_root / "manifest" / "report_manifest.json", {"row_count": raw_count})
+    normalized_lines = [
+        {
+            "line_id": f"line-{index + 1}",
+            "invoice_identity": "invoice-1",
+            "run_id": run_id,
+            "provider": "AAPT",
+        }
+        for index in range(raw_count)
+    ]
+    raw_path = run_root / "raw-recon-report" / "raw-reconciliation.xlsx"
+    refined_path = run_root / "refined-recon-report" / "refined-reconciliation.xlsx"
+    logical_run_path = common.logical_sharepoint_run_path("AAPT", run_root)
+    raw_runtime_rows = [
+        (
+            rows[index]
+            if index < len(rows)
+            else {
+                **{column: "" for column in BASE_COLUMNS},
+                "SupplierName": "AAPT",
+                "InvoiceServiceNumber": f"SVC-{index + 1}",
+            }
+        )
+        for index in range(raw_count)
+    ]
+    _write_workbook(
+        raw_path,
+        raw_runtime_rows,
+        BASE_COLUMNS,
+        run_path=logical_run_path,
+        period="2026-07",
+    )
+    _write_workbook(
+        refined_path,
+        rows,
+        refined_header,
+        run_path=logical_run_path,
+        period="2026-07",
+    )
+
+    write_json(
+        run_root / "manifest" / "run_manifest.json",
+        {"run_id": run_id, "db_update_enabled": False, "billing_period": "2026-07"},
+    )
+    write_json(
+        run_root / "manifest" / "parser_manifest.json",
+        {
+            "provider": "AAPT",
+            "run_id": run_id,
+            "source_rows": raw_count,
+            "parsed_rows": raw_count,
+            "documented_exclusions": 0,
+            "accounting_complete": True,
+        },
+    )
+    write_json(
+        run_root / "normalized" / "provider_lines.json",
+        {"invoice_headers": [{"invoice_identity": "invoice-1"}], "lines": normalized_lines},
+    )
+    write_json(
+        run_root / "manifest" / "report_manifest.json",
+        {"row_count": raw_count, "raw_output": str(raw_path), "refined_output": str(refined_path)},
+    )
+    write_json(
+        run_root / "evidence" / "billing_candidates.json",
+        {"run_id": run_id, "provider": "AAPT", "candidates_by_line": {}},
+    )
+    write_json(
+        run_root / "logs" / "billing_query_log.json",
+        [{"sql_hash": "abc", "read_only_validation": "passed"}],
+    )
+    runtime_rows = [
+        {**raw_runtime_rows[index], "line_id": line["line_id"]}
+        for index, line in enumerate(normalized_lines)
+    ]
+    write_json(run_root / "normalized" / "match_results.json", {"rows": runtime_rows})
+    write_json(
+        run_root / "manifest" / "persistence_manifest.json",
+        {
+            "run_id": run_id,
+            "provider": "AAPT",
+            "transaction": "committed",
+            "supplier_line_count": raw_count,
+            "result_count": raw_count,
+        },
+    )
+    write_json(run_root / "normalized" / "persisted_match_results.json", {"rows": runtime_rows})
+    write_json(
+        run_root / "manifest" / "audit_manifest.json",
+        {
+            "run_id": run_id,
+            "accepted_resolution_update_attempted": False,
+            "query_logs": [
+                {
+                    "sha256": common.sha256_file(
+                        run_root / "logs" / "billing_query_log.json"
+                    )
+                }
+            ],
+        },
+    )
+    completed = {
+        "source_staging",
+        "run_creation",
+        "archive_validation",
+        "provider_parsing",
+        "billing_preparation",
+        "deterministic_comparison",
+        "supplier_persistence",
+        "result_persistence",
+        "raw_workbook",
+    }
+    skipped = {"exception_investigation", "refined_workbook", "publication", "notification"}
+    write_json(
+        run_root / "manifest" / "run_state.json",
+        {
+            "run_id": run_id,
+            "run_status": "running",
+            "stages": {
+                stage: {"status": "completed" if stage in completed else "skipped" if stage in skipped else "running"}
+                for stage in common.RUN_STAGES
+            },
+        },
+    )
     write_json(run_root / "logs" / "parser_warnings.json", [])
-
-    with (run_root / "raw-recon-report" / "raw.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=BASE_COLUMNS)
-        writer.writeheader()
-        for _ in range(raw_count):
-            writer.writerow({column: "" for column in BASE_COLUMNS})
-
-    with (run_root / "refined-recon-report" / "refined.csv").open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=refined_header, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
 
     return run_root
 
@@ -158,6 +277,30 @@ class StrictCoverageEdgeTests(unittest.TestCase):
         self.assertFalse(billing_query._normalize_bool("no"))
         self.assertFalse(billing_query._date_in_window("", "2026-07-01", "2026-07-31"))
         self.assertEqual("select * from t where x=%(service_id)s", billing_query._postgres_sql("select * from t where x=:service_id"))
+        scoped = billing_query._scoped_sql(
+            "select service_id, provider, provider_account, transaction_date "
+            "from Finance.GenericNexonBilling",
+            "sqlserver",
+        )
+        self.assertIn("OPENJSON(:service_ids_json)", scoped)
+        self.assertIn("candidate_scope.provider_account = :provider_account", scoped)
+        with self.assertRaisesRegex(RuntimeError, "canonical candidate fields"):
+            billing_query._assert_read_only_sql(
+                "select 1 from Finance.GenericNexonBilling "
+                "-- provider provider_account transaction_date service_id",
+            )
+        with self.assertRaisesRegex(RuntimeError, "unapproved tables"):
+            billing_query._assert_read_only_sql(
+                "select ServiceNumber as service_id, SupplierName as provider, "
+                "AccountNumber as provider_account, BillingDate as transaction_date "
+                "from Finance.GenericNexonBilling, UnauthorizedTable"
+            )
+        with self.assertRaisesRegex(RuntimeError, "source columns"):
+            billing_query._assert_read_only_sql(
+                "select ServiceNumber as service_id, 'AAPT' as provider, "
+                "'ACC-1' as provider_account, BillingDate as transaction_date "
+                "from Finance.GenericNexonBilling"
+            )
 
         old_env = os.environ.copy()
         try:
@@ -167,7 +310,7 @@ class StrictCoverageEdgeTests(unittest.TestCase):
                 billing_query._execute_query("select 1", {})
 
             original_execute_postgres = billing_query._execute_postgres
-            billing_query._execute_postgres = lambda dsn, sql, params: [{"ok": True}]
+            billing_query._execute_postgres = lambda dsn, sql, params, timeout_seconds, row_limit: [{"ok": True}]
             os.environ["NEXON_RECON_BILLING_MODE"] = "postgres"
             self.assertEqual([{"ok": True}], billing_query._execute_query("select 1", {}))
             billing_query._execute_postgres = original_execute_postgres
@@ -184,7 +327,9 @@ class StrictCoverageEdgeTests(unittest.TestCase):
 
             builtins.__import__ = fake_import
             with self.assertRaisesRegex(RuntimeError, "psycopg is required"):
-                billing_query._execute_postgres("dsn", "select 1", {})
+                billing_query._execute_postgres(
+                    "dsn", "select 1", {}, timeout_seconds=30, row_limit=100
+                )
         finally:
             builtins.__import__ = old_import
 
@@ -202,7 +347,7 @@ class StrictCoverageEdgeTests(unittest.TestCase):
                     self.sql = sql
                     self.params = params
 
-                def fetchall(self) -> list[dict[str, str]]:
+                def fetchmany(self, _limit: int) -> list[dict[str, str]]:
                     return [{"service_id": "SVC-1"}]
 
             class FakeConnection:
@@ -212,12 +357,24 @@ class StrictCoverageEdgeTests(unittest.TestCase):
                 def __exit__(self, *_args: object) -> None:
                     return None
 
+                def execute(self, _sql: str) -> None:
+                    return None
+
                 def cursor(self) -> FakeCursor:
                     return FakeCursor()
 
             sys.modules["psycopg"] = types.SimpleNamespace(connect=lambda dsn, row_factory=None: FakeConnection())
             sys.modules["psycopg.rows"] = types.SimpleNamespace(dict_row=object())
-            self.assertEqual([{"service_id": "SVC-1"}], billing_query._execute_postgres("dsn", "select :service_id", {"service_id": "SVC-1"}))
+            self.assertEqual(
+                [{"service_id": "SVC-1"}],
+                billing_query._execute_postgres(
+                    "dsn",
+                    "select :service_id",
+                    {"service_id": "SVC-1"},
+                    timeout_seconds=30,
+                    row_limit=100,
+                ),
+            )
         finally:
             if old_psycopg is None:
                 sys.modules.pop("psycopg", None)
@@ -292,6 +449,7 @@ class StrictCoverageEdgeTests(unittest.TestCase):
 
             source = root / "invoice.csv"
             source.write_text("invoice", encoding="utf-8")
+            (root / "result" / "AAPT").mkdir(parents=True)
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 self.assertEqual(
@@ -333,13 +491,20 @@ class StrictCoverageEdgeTests(unittest.TestCase):
             optional_db_update._build_update_plan([{"human_verified_status": "bad"}], {})
         skipped = optional_db_update._build_update_plan([{"human_verified_status": "not_reviewed"}], {})
         self.assertEqual(1, skipped["skipped_row_count"])
+        rejected = optional_db_update._build_update_plan([{"human_verified_status": "rejected"}], {})
+        self.assertEqual(1, rejected["skipped_row_count"])
         with self.assertRaisesRegex(RuntimeError, "requires human_verified_invoice_number"):
             optional_db_update._build_update_plan([{"human_verified_status": "verified"}], {})
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            report = root / "refined.csv"
-            report.write_text("human_verified_status,human_verified_invoice_number\nnot_reviewed,\n", encoding="utf-8")
+            report = root / "refined.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Result"
+            sheet.append(["line_id", "provider", "human_verified_status", "human_verified_invoice_number"])
+            sheet.append(["line-1", "AAPT", "not_reviewed", ""])
+            workbook.save(report)
             disabled = root / "disabled.yaml"
             write_config(disabled, db_update_enabled=False)
             with self.assertRaisesRegex(RuntimeError, "DB update is disabled"):
@@ -347,12 +512,38 @@ class StrictCoverageEdgeTests(unittest.TestCase):
 
             enabled = root / "enabled.yaml"
             write_config(enabled, db_update_enabled=True)
-            with self.assertRaisesRegex(RuntimeError, "approved change ticket"):
+            with self.assertRaisesRegex(RuntimeError, "controlled approval artifact"):
                 call_main(optional_db_update, ["--config", enabled, "--refined-report", report, "--audit-output", root / "audit.json"])
+            approval = root / "approval.json"
+            approval.write_text(
+                json.dumps(
+                    {
+                        "run_id": "AAPT_20260709_153012_A1B2C",
+                        "report_id": hashlib.sha256(report.read_bytes()).hexdigest(),
+                        "approved_row_ids": ["line-1"],
+                        "approved_by": "reviewer@nexon.com.au",
+                        "approved_at": "2026-07-09T15:35:00+10:00",
+                        "eligibility_policy_version": "accepted-resolution-v1",
+                        "dry_run_hash": "dry-run-sha256",
+                        "change_ticket": "CHG-1",
+                        "batch_idempotency_key": "batch-1",
+                    }
+                ),
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(RuntimeError, "dry-run"):
                 call_main(
                     optional_db_update,
-                    ["--config", enabled, "--refined-report", report, "--audit-output", root / "audit.json", "--approved-change-ticket", "CHG-1"],
+                    [
+                        "--config",
+                        enabled,
+                        "--refined-report",
+                        report,
+                        "--audit-output",
+                        root / "audit.json",
+                        "--approval-artifact",
+                        approval,
+                    ],
                 )
 
     def test_preflight_config_shapes_and_local_success(self) -> None:
@@ -496,6 +687,7 @@ class StrictCoverageEdgeTests(unittest.TestCase):
         original_graph_json = sharepoint_connector._graph_json
         original_get_item = sharepoint_connector._get_item
         original_ensure_folder = sharepoint_connector._ensure_folder
+        original_sharepoint_roots = sharepoint_connector.sharepoint_roots
         try:
             def raise_graph_error(*_args: object, **_kwargs: object) -> object:
                 raise HTTPError("https://graph.test", 403, "no", {}, io.BytesIO(b"denied"))
@@ -536,6 +728,10 @@ class StrictCoverageEdgeTests(unittest.TestCase):
                 root = Path(tmp)
                 output = root / "spaces.json"
                 config = {"provider_api_adapters": {"aapt": True}}
+                sharepoint_connector.sharepoint_roots = lambda config: (
+                    root / "upload",
+                    root / "result",
+                )
                 args = SimpleNamespace(provider="AAPT", mode="local", output=output)
                 self.assertEqual(2, sharepoint_connector.check_spaces(args, config))
                 self.assertEqual("setup_incomplete", read_json(output)["status"])
@@ -569,6 +765,7 @@ class StrictCoverageEdgeTests(unittest.TestCase):
             sharepoint_connector._graph_json = original_graph_json
             sharepoint_connector._get_item = original_get_item
             sharepoint_connector._ensure_folder = original_ensure_folder
+            sharepoint_connector.sharepoint_roots = original_sharepoint_roots
             os.environ.clear()
             os.environ.update(old_env)
 
@@ -597,57 +794,74 @@ class StrictCoverageEdgeTests(unittest.TestCase):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "audit-attempt")
-            write_json(run_root / "manifest" / "audit_manifest.json", {"db_update_attempted": True})
-            with self.assertRaisesRegex(RuntimeError, "DB update was attempted"):
+            write_json(
+                run_root / "manifest" / "audit_manifest.json",
+                {
+                    "run_id": run_root.name,
+                    "accepted_resolution_update_attempted": True,
+                },
+            )
+            with self.assertRaisesRegex(RuntimeError, "accepted-resolution update was attempted"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "missing-raw")
-            next((run_root / "raw-recon-report").glob("*.csv")).unlink()
-            with self.assertRaisesRegex(RuntimeError, "Missing raw CSV"):
+            next((run_root / "raw-recon-report").glob("*.xlsx")).unlink()
+            with self.assertRaisesRegex(RuntimeError, "Raw workbook is missing"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "missing-refined")
-            next((run_root / "refined-recon-report").glob("*.csv")).unlink()
-            with self.assertRaisesRegex(RuntimeError, "Missing refined CSV"):
+            next((run_root / "refined-recon-report").glob("*.xlsx")).unlink()
+            with self.assertRaisesRegex(RuntimeError, "Refined workbook is missing"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "row-mismatch", raw_count=2)
-            write_json(run_root / "manifest" / "report_manifest.json", {"row_count": 2})
-            with self.assertRaisesRegex(RuntimeError, "Raw/refined row count mismatch"):
+            with self.assertRaisesRegex(RuntimeError, "Raw/refined workbook row counts differ"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "missing-column")
-            refined = next((run_root / "refined-recon-report").glob("*.csv"))
-            refined.write_text("line_id,agent_match_status,human_verified_status,agent_evidence_summary\n1,no_match,not_reviewed,evidence\n", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "Missing refined columns"):
+            refined = next((run_root / "refined-recon-report").glob("*.xlsx"))
+            _write_workbook(
+                refined,
+                [{"line_id": "1", "agent_match_status": "no_match", "human_verified_status": "not_reviewed", "agent_evidence_summary": "evidence"}],
+                ["line_id", "agent_match_status", "human_verified_status", "agent_evidence_summary"],
+                run_path=common.logical_sharepoint_run_path("AAPT", run_root),
+                period="2026-07",
+            )
+            with self.assertRaisesRegex(RuntimeError, "Refined Result columns"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "forbidden-column")
-            refined = next((run_root / "refined-recon-report").glob("*.csv"))
+            refined = next((run_root / "refined-recon-report").glob("*.xlsx"))
             header = BASE_COLUMNS + APPROVED_REFINED_COLUMNS + [next(iter(EXCLUDED_PHASE1_COLUMNS))]
             row = {column: "" for column in header}
             row["agent_match_status"] = "no_match"
             row["agent_evidence_summary"] = "No billing candidate was found."
             row["human_verified_status"] = "not_reviewed"
-            with refined.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=header)
-                writer.writeheader()
-                writer.writerow(row)
-            with self.assertRaisesRegex(RuntimeError, "Forbidden refined columns"):
+            _write_workbook(
+                refined,
+                [row],
+                header,
+                run_path=common.logical_sharepoint_run_path("AAPT", run_root),
+                period="2026-07",
+            )
+            with self.assertRaisesRegex(RuntimeError, "Refined Result columns"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             run_root = make_valid_run(root / "unexpected-column")
-            refined = next((run_root / "refined-recon-report").glob("*.csv"))
+            refined = next((run_root / "refined-recon-report").glob("*.xlsx"))
             header = BASE_COLUMNS + APPROVED_REFINED_COLUMNS + ["agent_surprise"]
             row = {column: "" for column in header}
             row["agent_match_status"] = "no_match"
             row["agent_evidence_summary"] = "No billing candidate was found."
             row["human_verified_status"] = "not_reviewed"
-            with refined.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=header)
-                writer.writeheader()
-                writer.writerow(row)
-            with self.assertRaisesRegex(RuntimeError, "Unexpected agent/human"):
+            _write_workbook(
+                refined,
+                [row],
+                header,
+                run_path=common.logical_sharepoint_run_path("AAPT", run_root),
+                period="2026-07",
+            )
+            with self.assertRaisesRegex(RuntimeError, "Refined Result columns"):
                 call_main(validate_run, ["--config", config, "--run-root", run_root])
 
             bad_agent_row = {column: "" for column in BASE_COLUMNS + APPROVED_REFINED_COLUMNS}

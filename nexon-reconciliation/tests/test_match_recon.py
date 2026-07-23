@@ -11,71 +11,61 @@ sys.path.insert(0, str(SCRIPTS))
 from recon_core.match_recon import classify_line  # noqa: E402
 
 
+def invoice_line() -> dict:
+    return {
+        "line_id": "line-1",
+        "invoice_identity": "invoice-1",
+        "request_key": "run:invoice-1",
+        "run_id": "AAPT_20260709_153012_A1B2C",
+        "provider": "AAPT",
+        "provider_account": "ACC-1",
+        "invoice_number": "INV-1",
+        "service_id_raw": "00123",
+        "service_id_normalized": "123",
+        "supplier_amount": "10.00",
+        "detail_description": "Service",
+    }
+
+
 class MatchEngineTests(unittest.TestCase):
-    def test_no_candidate_requires_review(self) -> None:
-        row = classify_line({"line_id": "1"}, [])
-        self.assertEqual("no_match", row["agent_match_status"])
-        self.assertEqual("no_candidate", row["agent_match_rule"])
-        self.assertIn("No billing candidate", row["agent_evidence_summary"])
-        self.assertTrue(row["agent_review_required"])
+    def test_no_candidate_is_supplier_only_without_agent_fields(self) -> None:
+        row = classify_line(invoice_line(), [])
+        self.assertEqual("Supplier Only", row["ReconMatchStatus"])
+        self.assertEqual("supplier_without_billing_candidate_v1", row["deterministic_match_rule"])
+        self.assertIn("No billing candidate", row["deterministic_evidence_summary"])
+        self.assertNotIn("agent_match_status", row)
+        self.assertEqual("123", row["InvoiceServiceNumber"])
 
-    def test_exact_single_candidate_auto_matches(self) -> None:
+    def test_exact_single_candidate_is_current_matched_status(self) -> None:
         row = classify_line(
-            {"line_id": "1"},
+            invoice_line(),
             [
                 {
-                    "customer_account": "A",
-                    "subscription_id": "SUB-1",
-                    "invoice_number": "INV-1",
-                    "service_id": "SVC-1",
+                    "candidate_id": "billing-1",
+                    "customer_account": "CUST-1",
+                    "service_id": "123",
                     "service_id_match": True,
                     "provider_match": True,
                     "billing_period_match": True,
                 }
             ],
         )
-        self.assertEqual("auto_matched", row["agent_match_status"])
-        self.assertEqual("deterministic_exact_candidate_v1", row["agent_match_rule"])
-        self.assertEqual("Matched on service_id, provider, billing_period.", row["agent_evidence_summary"])
-        self.assertEqual("A", row["agent_suggested_customer_account"])
-        self.assertEqual("SUB-1", row["agent_suggested_subscription_id"])
-        self.assertEqual("INV-1", row["agent_suggested_invoice_number"])
-        self.assertEqual("SVC-1", row["agent_suggested_service_id"])
-        self.assertFalse(row["agent_review_required"])
+        self.assertEqual("Matched", row["ReconMatchStatus"])
+        self.assertEqual("deterministic_exact_candidate_v1", row["deterministic_match_rule"])
+        self.assertEqual("billing-1", row["GenericNexonBillingId"])
+        self.assertEqual("CUST-1", row["BillingCustomerName"])
+        self.assertNotIn("agent_suggested_customer_account", row)
 
-    def test_exact_single_candidate_can_blank_auto_match_evidence(self) -> None:
-        row = classify_line(
-            {"line_id": "1"},
-            [
-                {
-                    "service_id_match": True,
-                    "provider_match": True,
-                    "billing_period_match": True,
-                }
-            ],
-            auto_matched_evidence="blank",
-        )
-        self.assertEqual("auto_matched", row["agent_match_status"])
-        self.assertEqual("", row["agent_evidence_summary"])
+    def test_weak_single_candidate_is_not_matched(self) -> None:
+        row = classify_line(invoice_line(), [{"candidate_id": "billing-1", "customer": "A"}])
+        self.assertEqual("Not Matched", row["ReconMatchStatus"])
+        self.assertEqual("single_candidate_evidence_incomplete_v1", row["deterministic_match_rule"])
 
-    def test_evidence_summary_is_shortened(self) -> None:
-        row = classify_line({"line_id": "1"}, [], evidence_max_chars=40)
-        self.assertLessEqual(len(row["agent_evidence_summary"]), 40)
-        self.assertTrue(row["agent_evidence_summary"].endswith("..."))
-
-    def test_weak_single_candidate_requires_review(self) -> None:
-        row = classify_line({"line_id": "1"}, [{"customer": "A"}])
-        self.assertEqual("needs_review", row["agent_match_status"])
-        self.assertEqual("candidate_evidence_incomplete", row["agent_match_rule"])
-        self.assertIn("incomplete", row["agent_evidence_summary"])
-        self.assertTrue(row["agent_review_required"])
-
-    def test_multiple_candidates_require_review(self) -> None:
-        row = classify_line({"line_id": "1"}, [{"customer": "A"}, {"customer": "B"}])
-        self.assertEqual("multi_match", row["agent_match_status"])
-        self.assertEqual("multiple_candidates", row["agent_match_rule"])
-        self.assertIn("2 billing candidates", row["agent_evidence_summary"])
-        self.assertTrue(row["agent_review_required"])
+    def test_multiple_candidates_are_not_matched(self) -> None:
+        row = classify_line(invoice_line(), [{"candidate_id": "1"}, {"candidate_id": "2"}])
+        self.assertEqual("Not Matched", row["ReconMatchStatus"])
+        self.assertEqual("multiple_candidates_v1", row["deterministic_match_rule"])
+        self.assertEqual(2, row["deterministic_candidate_count"])
 
 
 if __name__ == "__main__":

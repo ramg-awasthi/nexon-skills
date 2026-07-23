@@ -41,6 +41,7 @@ provider_api_adapters:
 billing:
   mode: read_only_sql
   agent_sql_allowed: true
+  audit_required: true
 reports:
   evidence_summary:
     auto_matched: short
@@ -160,10 +161,10 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
             connection = sqlite3.connect(db_path)
             try:
                 connection.execute(
-                    "create table candidates (service_id text, service_provider text, transaction_date text, subscription_id text)"
+                    "create table billing_candidates (service_id text, service_provider text, provider_account text, transaction_date text, subscription_id text)"
                 )
                 connection.execute(
-                    "insert into candidates values ('SVC-1', 'AAPT', '2026-07-15', 'SUB-1')"
+                    "insert into billing_candidates values ('SVC-1', 'AAPT', 'ACC-1', '2026-07-15', 'SUB-1')"
                 )
                 connection.commit()
             finally:
@@ -175,7 +176,9 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
                         "lines": [
                             {
                                 "line_id": "line-1",
+                                "run_id": "AAPT_20260709_153012_A1B2C",
                                 "provider": "AAPT",
+                                "provider_account": "ACC-1",
                                 "service_id_normalized": "SVC-1",
                                 "billing_period_start": "2026-07-01",
                                 "billing_period_end": "2026-07-31",
@@ -189,8 +192,9 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
             query_log = root / "query-log.json"
             sql_file = root / "billing-query.sql"
             sql_file.write_text(
-                "select service_id, service_provider, transaction_date, subscription_id "
-                "from candidates where service_id = :service_id and service_provider = :provider",
+                "select service_id, service_provider as provider, "
+                "provider_account, transaction_date, subscription_id "
+                "from billing_candidates",
                 encoding="utf-8",
             )
             env = os.environ.copy()
@@ -226,13 +230,13 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
             self.assertTrue(candidate["provider_match"])
             self.assertTrue(candidate["billing_period_match"])
             self.assertEqual("SUB-1", candidate["subscription_id"])
-            self.assertEqual("read_only_sql", log_entry["billing_mode"])
+            self.assertEqual("sqlite", log_entry["billing_mode"])
             self.assertEqual(str(sql_file), log_entry["sql_source"])
             self.assertEqual(payload["sql_hash"], log_entry["sql_hash"])
             self.assertEqual("passed", log_entry["read_only_validation"])
             self.assertIn("duration_ms", log_entry)
             self.assertIn("parameter_hashes", log_entry)
-            self.assertIn("service_id", log_entry["parameter_hashes"])
+            self.assertIn("service_ids_json", log_entry["parameter_hashes"])
 
     def test_billing_query_rejects_non_read_only_sql(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -242,7 +246,7 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
             db_path = root / "billing.sqlite"
             sqlite3.connect(db_path).close()
             normalized = root / "normalized.json"
-            normalized.write_text(json.dumps({"lines": [{"line_id": "line-1", "provider": "AAPT"}]}), encoding="utf-8")
+            normalized.write_text(json.dumps({"lines": [{"line_id": "line-1", "run_id": "AAPT_20260709_153012_A1B2C", "provider": "AAPT"}]}), encoding="utf-8")
             sql_file = root / "unsafe.sql"
             sql_file.write_text("update candidates set service_id = :service_id", encoding="utf-8")
             env = os.environ.copy()
@@ -281,7 +285,7 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
             db_path = root / "billing.sqlite"
             sqlite3.connect(db_path).close()
             normalized = root / "normalized.json"
-            normalized.write_text(json.dumps({"lines": [{"line_id": "line-1", "provider": "AAPT"}]}), encoding="utf-8")
+            normalized.write_text(json.dumps({"lines": [{"line_id": "line-1", "run_id": "AAPT_20260709_153012_A1B2C", "provider": "AAPT"}]}), encoding="utf-8")
             sql_file = root / "unsafe.sql"
             sql_file.write_text("select service_id into temp unsafe_candidate_copy from candidates", encoding="utf-8")
             env = os.environ.copy()
@@ -343,8 +347,8 @@ class ConnectorBillingAndFailureTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             payload = read_json(output)
             self.assertEqual("failed", payload["status"])
-            self.assertEqual("billing_query", payload["stage"])
-            self.assertFalse(payload["db_update_attempted"])
+            self.assertEqual("billing_query", payload["failed_stage"])
+            self.assertFalse(payload["accepted_resolution_update_attempted"])
             self.assertTrue(payload["notification_required"])
 
     def test_notify_failure_noops_when_notifications_disabled(self) -> None:

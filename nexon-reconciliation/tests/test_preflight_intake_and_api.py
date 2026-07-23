@@ -35,6 +35,7 @@ provider_api_adapters:
 {adapters}billing:
   mode: read_only_sql
   agent_sql_allowed: true
+  audit_required: true
 reports:
   evidence_summary:
     auto_matched: short
@@ -103,6 +104,7 @@ class PreflightIntakeAndProviderApiTests(unittest.TestCase):
             root = Path(tmp)
             config = root / "config.yaml"
             result_root = root / "result"
+            (result_root / "AAPT").mkdir(parents=True)
             source = root / "invoice.csv"
             source.write_text("service,amount\nSVC-1,12\n", encoding="utf-8")
             write_config(config)
@@ -268,7 +270,7 @@ class PreflightIntakeAndProviderApiTests(unittest.TestCase):
             )
 
             self.assertEqual(0, result.returncode, result.stderr + result.stdout)
-            self.assertEqual("no_match", read_json(output)["rows"][0]["agent_match_status"])
+            self.assertEqual("Supplier Only", read_json(output)["rows"][0]["ReconMatchStatus"])
 
     def test_safe_unpack_cli_writes_blocked_manifest_for_unsafe_zip(self) -> None:
         import zipfile
@@ -277,6 +279,8 @@ class PreflightIntakeAndProviderApiTests(unittest.TestCase):
             root = Path(tmp)
             archive = root / "unsafe.zip"
             manifest = root / "manifest.json"
+            config = root / "config.yaml"
+            write_config(config)
             with zipfile.ZipFile(archive, "w") as zf:
                 zf.writestr("../escape.txt", "bad")
 
@@ -284,6 +288,8 @@ class PreflightIntakeAndProviderApiTests(unittest.TestCase):
                 [
                     sys.executable,
                     str(SCRIPTS / "safe_unpack.py"),
+                    "--config",
+                    str(config),
                     "--zip",
                     str(archive),
                     "--output-dir",
@@ -389,16 +395,23 @@ class PreflightIntakeAndProviderApiTests(unittest.TestCase):
             self.assertEqual(b"file", destination.read_bytes())
             self.assertEqual(2, len(calls))
 
-    def test_run_recon_fails_closed_until_full_runner_is_approved(self) -> None:
+    def test_run_recon_requires_explicit_new_run_inputs(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(SCRIPTS / "run_recon.py"), "--provider", "AAPT"],
+            [
+                sys.executable,
+                str(SCRIPTS / "run_recon.py"),
+                "--config",
+                str(Path(__file__).resolve().parents[1] / "config" / "recon_settings.yaml"),
+                "--provider",
+                "AAPT",
+            ],
             capture_output=True,
             text=True,
             check=False,
         )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("integration_unavailable", result.stderr + result.stdout)
+        self.assertIn("run_input_missing", result.stderr + result.stdout)
 
 
 if __name__ == "__main__":

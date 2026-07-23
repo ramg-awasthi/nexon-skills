@@ -67,9 +67,9 @@ Then to:
 scripts/provider_adapters/<provider>/
 ```
 
-Only `scripts/parser_core/parse_provider_invoice.py` may decide parser routing. `SKILL.md` describes the command and contract only; it must not contain provider branching logic beyond naming the supported adapters.
+Only `scripts/parser_core/parse_provider_invoice.py` executes parser-routing decisions. The route description below documents that code-owned behavior; agents must not reproduce or override it.
 
-Optus intentionally has two isolated adapter modules under one provider folder: `scripts/provider_adapters/optus/parser_pdf.py` and `scripts/provider_adapters/optus/parser_excel_voice.py`. The common router selects between them by source package shape: PDF-only packages use `optus_pdf`, non-PDF voice/Excel packages use `optus_excel_voice`, and mixed PDF plus non-PDF packages fail as ambiguous. Do not move this decision into skill prompt logic, runtime config, the supervisor prompt, or a merged Optus parser.
+Optus intentionally has two isolated adapter modules under one provider folder: `scripts/provider_adapters/optus/parser_pdf.py` and `scripts/provider_adapters/optus/parser_excel_voice.py`. The common router selects between them by source package shape: PDF-only packages use `optus_pdf`, voice ZIP/DAT packages use `optus_excel_voice`, unsupported file types fail closed, and mixed PDF plus voice packages fail as ambiguous. Do not move this decision into skill prompt logic, runtime config, the supervisor prompt, or a merged Optus parser.
 
 ## Provider Adapter Layout
 
@@ -91,7 +91,7 @@ Implementation history and readiness evidence belong outside runtime instruction
 Input:
 
 - provider;
-- run id when available;
+- mandatory run id;
 - source or extracted file path;
 - shared runtime config from `../nexon-reconciliation/config/recon_settings.yaml` for feature flags and common policies only. Provider parser routing is code-owned.
 
@@ -106,9 +106,24 @@ The normalized JSON must use this top-level shape:
 ```json
 {
   "headers": ["..."],
+  "invoice_headers": [
+    {
+      "invoice_identity": "...",
+      "request_key": "<run_id>:<invoice_identity>",
+      "provider": "AAPT",
+      "provider_account": "...",
+      "invoice_number": "...",
+      "billing_period_start": "...",
+      "billing_period_end": "...",
+      "currency": "AUD",
+      "source_members": ["..."]
+    }
+  ],
   "lines": [
     {
       "line_id": "...",
+      "invoice_identity": "...",
+      "request_key": "...",
       "provider": "AAPT",
       "run_id": "...",
       "source_file": "...",
@@ -120,11 +135,16 @@ The normalized JSON must use this top-level shape:
       "billing_period_end": "...",
       "amount": "..."
     }
-  ]
+  ],
+  "accounting": {
+    "source_rows_considered": 1,
+    "parsed_rows": 1,
+    "documented_exclusions": 0
+  }
 }
 ```
 
-Every row must preserve traceability to source file and row/page/sheet when available.
+Every row must preserve traceability to source file and row/page/sheet when available. Every line references one `invoice_identity`. The parser manifest identifies consumed and skipped source members and must satisfy `source_rows = parsed_rows + documented_exclusions`.
 
 ## Provider Notes
 

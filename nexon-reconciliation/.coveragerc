@@ -1,5 +1,5 @@
 [run]
-source = scripts
+source = scripts/recon_core
 parallel = true
 patch = subprocess
 

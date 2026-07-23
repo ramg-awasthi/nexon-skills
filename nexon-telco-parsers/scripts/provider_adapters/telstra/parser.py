@@ -42,10 +42,11 @@ def parse(source_files: list[Path], context: dict) -> dict:
             detail = first_non_empty(
                 row,
                 "CALL_TYPE",
+                "Number Description 2",
+                "Service Description 2",
                 "Number Description 1",
                 "Service Description 1",
                 "Service Descriptions",
-                "Number Description 2",
             )
             charge_type = _charge_type(
                 first_non_empty(row, "CHARGE_TYPE", "Charge Type"),

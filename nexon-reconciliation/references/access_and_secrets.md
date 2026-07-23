@@ -1,10 +1,11 @@
 # Access And Secrets
 
-Authoritative setup details live in `../../../docs/ACCESS_SETUP.md`.
+Fleet environment provisioning is maintained outside this portable skill. This
+reference defines the runtime identities and variable names the skill expects.
 
 ## SharePoint Access
 
-Use the native LangSmith SharePoint tool for SharePoint upload/result access. Do not use a runtime profile, browser profile, Graph wrapper script, or model-driven UI operation for normal SharePoint file movement.
+Use the native SharePoint tool for listing, selection, movement, artifact upload, and links. Use an approved Graph service principal or equivalent binary-capable connector to download ZIP, PDF, XLSX, and other binary sources.
 
 The only approved production storage target is:
 
@@ -20,9 +21,10 @@ Do not route normal runs to the old personal OneDrive `Recon` folder, the `Accou
 The native SharePoint tool must handle:
 
 - listing provider upload/result folders;
-- reading or staging the selected source package for deterministic scripts;
 - moving the original uploaded source package into the run `source/` folder;
 - uploading raw reports, refined reports, evidence, logs, and manifests.
+
+The binary connector must download the selected source without text decoding and verify its checksum. Download and checksum must complete before the native SharePoint tool moves the cloud source into a run folder.
 
 If the native SharePoint tool cannot confirm permissions, stop with `setup_incomplete`.
 
@@ -48,14 +50,23 @@ Use the native Outlook Send Email tool for failure email notifications when enab
 
 SharePoint:
 
-1. Native LangSmith SharePoint tool.
-2. Stop if the native tool lacks permissions or required file operations.
+1. Native SharePoint tool for listing, moves, uploads, and links.
+2. Approved Graph application connector for binary download.
+3. Stop if either required path lacks permissions or required file operations.
 
 Billing/Inomial:
 
 1. Approved read-only reconciliation DB credentials.
-2. Approved direct Inomial PostgreSQL read-only credentials.
-3. UI/browser access only as fallback and only for investigation, not bulk extraction.
+2. Direct Inomial PostgreSQL only after a separate approval.
+3. UI/browser access only for investigation, not bulk extraction.
+
+Core reconciliation persistence:
+
+1. A separate Azure SQL identity scoped to the existing `Finance` reconciliation tables.
+2. `NEXON_RECON_CORE_MODE=azure_sql` or `sqlserver`.
+3. `NEXON_RECON_CORE_DSN` supplied only through the Fleet secret store.
+4. `sqlite_shadow` only for local tests.
+5. Stop if the identity can alter schema or if the target is not the approved side-by-side/cutover database.
 
 Provider invoices:
 

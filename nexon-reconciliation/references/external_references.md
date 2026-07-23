@@ -11,7 +11,7 @@ Do not use packaging or plugin research to change runtime reconciliation behavio
 
 ## SharePoint Runtime
 
-Runtime SharePoint access uses the native LangSmith SharePoint tool. Do not use Graph API references, browser profiles, or model-driven UI operations to define normal SharePoint behavior.
+Runtime SharePoint listing, movement, upload, and links use the native SharePoint tool. Binary source download requires an approved Graph service principal or equivalent binary-capable connector.
 
 The active runtime site is `Nexon Reconciliation Automation` at `https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation`, library `Shared Documents`.
 

@@ -31,10 +31,23 @@ def select_parser(provider: str, source_files: list[Path]) -> str:
         if not source_files:
             raise ValueError("Optus package has no source files.")
         has_pdf = any(path.suffix.lower() == ".pdf" for path in source_files)
-        has_non_pdf = any(path.suffix.lower() != ".pdf" for path in source_files)
-        if has_pdf and has_non_pdf:
-            raise ValueError("Ambiguous Optus package: split PDF and Excel/voice files into separate runs.")
-        return "optus_pdf" if has_pdf else "optus_excel_voice"
+        has_voice = any(path.suffix.lower() in {".zip", ".dat"} for path in source_files)
+        unsupported = [
+            path.name
+            for path in source_files
+            if path.suffix.lower() not in {".pdf", ".zip", ".dat"}
+        ]
+        if unsupported:
+            raise ValueError(f"Unsupported Optus package members: {sorted(unsupported)}")
+        if has_pdf and has_voice:
+            raise ValueError(
+                "Ambiguous Optus package: split PDF and voice ZIP/DAT files into separate runs."
+            )
+        if has_pdf:
+            return "optus_pdf"
+        if has_voice:
+            return "optus_excel_voice"
+        raise ValueError("Optus package has no supported PDF or voice ZIP/DAT file.")
     if provider not in PROVIDER_PARSER_KEYS:
         raise ValueError(f"Provider is not supported: {provider}")
     return PROVIDER_PARSER_KEYS[provider]
@@ -47,7 +60,7 @@ def main() -> int:
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--warnings", type=Path, required=True)
-    parser.add_argument("--run-id")
+    parser.add_argument("--run-id", required=True)
     parser.add_argument("--manifest", type=Path)
     args = parser.parse_args()
 
@@ -66,6 +79,17 @@ def main() -> int:
             "parser_key": parser_key,
         }
         result = module.parse(source_files, context)
+        lines = result.get("lines", [])
+        invoice_headers = result.get("invoice_headers", [])
+        accounting = result.get("accounting", {})
+        if not isinstance(lines, list) or not isinstance(invoice_headers, list):
+            raise ValueError("parser_failed: parser output must contain invoice_headers and lines lists")
+        if not invoice_headers and lines:
+            raise ValueError("parser_failed: parser output has lines without invoice headers")
+        source_rows = int(accounting.get("source_rows_considered", len(lines)))
+        exclusions = int(accounting.get("documented_exclusions", 0))
+        if source_rows != len(lines) + exclusions:
+            raise ValueError("parser_failed: source row accounting does not reconcile")
         write_json(args.output, result)
         write_json(args.warnings, [])
         if args.manifest:
@@ -76,13 +100,32 @@ def main() -> int:
                     "run_id": args.run_id,
                     "parser": parser_key,
                     "source_file_count": len(source_files),
+                    "source_files": [str(path) for path in source_files],
+                    "consumed_source_files": [str(path) for path in source_files],
+                    "skipped_source_files": [],
+                    "invoice_header_count": len(invoice_headers),
+                    "source_rows": source_rows,
+                    "parsed_rows": len(lines),
+                    "documented_exclusions": exclusions,
+                    "accounting_complete": True,
                     "status": "parsed",
                 },
             )
         return 0
     except (NotImplementedError, ValueError) as exc:
-        write_json(args.output, {"headers": [], "lines": []})
-        write_json(args.warnings, [{"severity": "error", "message": str(exc), "parser": locals().get("parser_key")}])
+        write_json(args.output, {"headers": [], "invoice_headers": [], "lines": [], "accounting": {}})
+        write_json(
+            args.warnings,
+            [
+                {
+                    "severity": "error",
+                    "code": "parser_unavailable",
+                    "message": str(exc),
+                    "parser": locals().get("parser_key"),
+                    "source_location": str(args.input_dir),
+                }
+            ],
+        )
         if args.manifest:
             write_json(
                 args.manifest,
@@ -96,14 +139,16 @@ def main() -> int:
             )
         return 3
     except Exception as exc:
-        write_json(args.output, {"headers": [], "lines": []})
+        write_json(args.output, {"headers": [], "invoice_headers": [], "lines": [], "accounting": {}})
         write_json(
             args.warnings,
             [
                 {
                     "severity": "error",
+                    "code": "parser_failed",
                     "message": f"parser_failed: unexpected parser error ({type(exc).__name__})",
                     "parser": locals().get("parser_key"),
+                    "source_location": str(args.input_dir),
                 }
             ],
         )

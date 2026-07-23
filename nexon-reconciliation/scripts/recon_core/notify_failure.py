@@ -19,8 +19,8 @@ def _safe_payload(manifest: dict) -> dict:
     return {
         "status": manifest.get("status"),
         "provider": manifest.get("provider"),
-        "stage": manifest.get("stage"),
-        "reason": manifest.get("reason"),
+        "stage": manifest.get("failed_stage"),
+        "reason": manifest.get("failure_code"),
         "run_id": manifest.get("run_id"),
         "recorded_at": manifest.get("recorded_at"),
     }

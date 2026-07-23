@@ -29,12 +29,77 @@ AGENT_MATCH_STATUS_VALUES = {
     "parser_warning",
 }
 
+RECON_MATCH_STATUS_VALUES = {
+    "Matched",
+    "Not Matched",
+    "Supplier Only",
+    "Billing System Only",
+    "Dispute",
+    "Manual Matched",
+    "Billing Initiated",
+    "Service Cancelled",
+}
+
+INVESTIGATOR_MATCH_STATUS_VALUES = {
+    "suggested_match",
+    "multi_match",
+    "no_match",
+    "needs_review",
+    "excluded",
+    "parser_warning",
+}
+
 HUMAN_VERIFIED_STATUS_VALUES = {
     "verified",
     "rejected",
     "deferred",
     "not_reviewed",
 }
+
+
+def logical_sharepoint_run_path(provider: str, run_root: Path) -> str:
+    return (
+        f"{DEFAULT_SHAREPOINT_RESULT_ROOT.as_posix()}/{provider}/"
+        f"{run_root.parent.parent.name}/{run_root.parent.name}/{run_root.name}"
+    )
+
+RAW_WORKBOOK_COLUMNS = [
+    "AccountPayableReconRequestId",
+    "GenericSupplierInvoiceLineItemId",
+    "ServiceProviderInvoiceNumber",
+    "GenericNexonBillingId",
+    "BillingDate",
+    "SupplierName",
+    "SupplierAccountNumber",
+    "NexonInfrastructure",
+    "BillingCustomerName",
+    "InvoiceServiceNumber",
+    "BillingServiceNumber",
+    "BillingSystem",
+    "InvoiceDetailDescription",
+    "BillingServiceDescription",
+    "InomialServiceSpecification",
+    "InvoiceServiceType",
+    "RecurringAmount",
+    "Non-RecurringAmount",
+    "Adjustment",
+    "Discount",
+    "Usage",
+    "InvoiceAmountExclGST",
+    "BillingAmountExclGST",
+    "LastInvoiceDate",
+    "Login",
+    "InvoiceID",
+    "InvoiceAmount",
+    "ReconMatchStatus",
+    "Dispute or Not",
+    "ManualMatch",
+    "ManualMatch-InvoiceNumber",
+    "ManualMatch-Amount",
+    "Customer Billing Initiated",
+    "Service Cancellation Initiated",
+    "Reason",
+]
 
 
 APPROVED_REFINED_COLUMNS = [
@@ -68,6 +133,26 @@ RUN_SUBDIRS = [
     "logs",
     "manifest",
 ]
+
+RUN_STAGES = [
+    "source_staging",
+    "run_creation",
+    "archive_validation",
+    "provider_parsing",
+    "supplier_persistence",
+    "billing_preparation",
+    "deterministic_comparison",
+    "result_persistence",
+    "raw_workbook",
+    "exception_investigation",
+    "refined_workbook",
+    "publication",
+    "validation",
+    "notification",
+]
+
+STAGE_STATUS_VALUES = {"pending", "running", "completed", "failed", "skipped"}
+RUN_STATUS_VALUES = {"created", "running", "completed", "failed"}
 
 EVIDENCE_SUMMARY_AUTO_MATCHED_MODES = {"short", "blank"}
 DEFAULT_EVIDENCE_SUMMARY_MAX_CHARS = 160
@@ -109,6 +194,25 @@ def evidence_summary_policy(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("reports.evidence_summary.max_chars must stay between 40 and 240.")
 
     return {"auto_matched": auto_matched, "max_chars": max_chars}
+
+
+def require_audit(config: dict[str, Any]) -> None:
+    billing = config.get("billing", {})
+    if not isinstance(billing, dict) or billing.get("audit_required") is not True:
+        raise RuntimeError("billing.audit_required must be true.")
+
+
+def positive_limit(config: dict[str, Any], key: str, default: int) -> int:
+    limits = config.get("limits", {})
+    if not isinstance(limits, dict):
+        limits = {}
+    try:
+        value = int(limits.get(key, default))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"limits.{key} must be an integer.") from exc
+    if value <= 0:
+        raise ValueError(f"limits.{key} must be greater than zero.")
+    return value
 
 
 def normalize_evidence_summary(summary: str, max_chars: int) -> str:

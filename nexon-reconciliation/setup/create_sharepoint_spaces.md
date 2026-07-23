@@ -50,7 +50,7 @@ Create result roots:
 ## Secrets And Profiles
 
 - Connect and authorize the native LangSmith SharePoint tool account.
-- Confirm the native SharePoint tool can list, read/stage, upload, and move files in the fixed upload/result spaces.
+- Confirm the native SharePoint tool can list, upload, and move files in the fixed upload/result spaces, and confirm the approved binary connector can download a test ZIP/PDF/XLSX without changing its checksum.
 - Store provider API and DB credentials in the profile secret store or environment secret manager.
 - Do not store secrets in `config/recon_settings.yaml`, prompts, reports, manifests, or logs.
 

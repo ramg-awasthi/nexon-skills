@@ -6,7 +6,7 @@ import os
 import shutil
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .common import DEFAULT_CONFIG_PATH, ensure_provider, load_config, sharepoint_roots, write_json
@@ -17,12 +17,48 @@ GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 
 def _token() -> str:
     token = os.environ.get("NEXON_RECON_GRAPH_ACCESS_TOKEN")
-    if not token:
+    if token:
+        return token
+
+    tenant_id = os.environ.get("NEXON_RECON_SHAREPOINT_TENANT_ID")
+    client_id = os.environ.get("NEXON_RECON_SHAREPOINT_CLIENT_ID")
+    client_secret = os.environ.get("NEXON_RECON_SHAREPOINT_CLIENT_SECRET")
+    if not all((tenant_id, client_id, client_secret)):
         raise RuntimeError(
-            "sharepoint_auth_missing: This legacy fallback connector requires "
-            "NEXON_RECON_GRAPH_ACCESS_TOKEN in the environment. Fleet runtime should use the native SharePoint tool."
+            "sharepoint_auth_missing: Configure NEXON_RECON_SHAREPOINT_TENANT_ID, "
+            "NEXON_RECON_SHAREPOINT_CLIENT_ID, and "
+            "NEXON_RECON_SHAREPOINT_CLIENT_SECRET for application authentication."
         )
-    return token
+
+    body = urlencode(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        }
+    ).encode("utf-8")
+    request = Request(
+        f"https://login.microsoftonline.com/{quote(tenant_id, safe='')}/oauth2/v2.0/token",
+        data=body,
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            "sharepoint_auth_failed: client-credential token request returned "
+            f"HTTP {exc.code}: {detail[:500]}"
+        ) from exc
+    access_token = payload.get("access_token")
+    if not access_token:
+        raise RuntimeError(
+            "sharepoint_auth_failed: token response did not include access_token."
+        )
+    return str(access_token)
 
 
 def _drive_id() -> str:

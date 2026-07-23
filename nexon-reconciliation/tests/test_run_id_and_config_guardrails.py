@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -9,11 +9,49 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
+from openpyxl import Workbook
+
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from recon_core.common import ensure_db_update_disabled, generate_run_id, resolve_run_id_collision, validate_run_id  # noqa: E402
+
+
+def write_reviewed_workbook(path: Path, *, status: str = "deferred", invoice_number: str = "") -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Result"
+    sheet.append(
+        [
+            "line_id",
+            "provider",
+            "service_id_raw",
+            "human_verified_status",
+            "human_verified_invoice_number",
+        ]
+    )
+    sheet.append(["line-1", "AAPT", "SVC-1", status, invoice_number])
+    workbook.save(path)
+
+
+def write_approval(path: Path, report: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": "AAPT_20260709_153012_A1B2C",
+                "report_id": hashlib.sha256(report.read_bytes()).hexdigest(),
+                "approved_row_ids": ["line-1"],
+                "approved_by": "reviewer@nexon.com.au",
+                "approved_at": "2026-07-09T15:35:00+10:00",
+                "eligibility_policy_version": "accepted-resolution-v1",
+                "dry_run_hash": "dry-run-sha256",
+                "change_ticket": "CAB-123",
+                "batch_idempotency_key": "AAPT_20260709_153012_A1B2C:CAB-123",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 class RunIdAndConfigGuardrailTests(unittest.TestCase):
@@ -56,8 +94,8 @@ class RunIdAndConfigGuardrailTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "recon_settings.yaml"
             config.write_text("features:\n  db_update_enabled: false\n", encoding="utf-8")
-            refined = Path(tmp) / "refined.csv"
-            refined.write_text("human_verified_status,human_verified_invoice_number\n", encoding="utf-8")
+            refined = Path(tmp) / "refined.xlsx"
+            write_reviewed_workbook(refined)
             result = subprocess.run(
                 [
                     sys.executable,
@@ -90,28 +128,10 @@ db_update_policy:
 """.lstrip(),
                 encoding="utf-8",
             )
-            refined = root / "refined.csv"
-            with refined.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=[
-                        "line_id",
-                        "provider",
-                        "service_id_raw",
-                        "human_verified_status",
-                        "human_verified_invoice_number",
-                    ],
-                )
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "line_id": "line-1",
-                        "provider": "AAPT",
-                        "service_id_raw": "SVC-1",
-                        "human_verified_status": "deferred",
-                        "human_verified_invoice_number": "",
-                    }
-                )
+            refined = root / "refined.xlsx"
+            write_reviewed_workbook(refined)
+            approval = root / "approval.json"
+            write_approval(approval, refined)
             audit = root / "audit.json"
 
             result = subprocess.run(
@@ -124,8 +144,8 @@ db_update_policy:
                     str(refined),
                     "--audit-output",
                     str(audit),
-                    "--approved-change-ticket",
-                    "CAB-123",
+                    "--approval-artifact",
+                    str(approval),
                     "--dry-run",
                 ],
                 capture_output=True,
@@ -152,12 +172,10 @@ db_update_policy:
 """.lstrip(),
                 encoding="utf-8",
             )
-            refined = root / "refined.csv"
-            refined.write_text(
-                "line_id,provider,human_verified_status,human_verified_invoice_number\n"
-                "line-1,AAPT,deferred,\n",
-                encoding="utf-8",
-            )
+            refined = root / "refined.xlsx"
+            write_reviewed_workbook(refined)
+            approval = root / "approval.json"
+            write_approval(approval, refined)
 
             result = subprocess.run(
                 [
@@ -169,8 +187,8 @@ db_update_policy:
                     str(refined),
                     "--audit-output",
                     str(root / "audit.json"),
-                    "--approved-change-ticket",
-                    "CAB-123",
+                    "--approval-artifact",
+                    str(approval),
                     "--dry-run",
                 ],
                 capture_output=True,

@@ -9,6 +9,7 @@ Adapter boundary: `scripts/provider_adapters/equinix/`
 ## Parser Rules
 
 - Extract only deterministic invoice lines and approved infrastructure split rows.
+- Round each emitted currency line independently to two decimals with `ROUND_HALF_UP`.
 - Matching/allocation must not auto-allocate one supplier line across multiple customer services.
 - Equinix one-to-many candidates remain review-only.
 - Fail closed for PDF, XLS, or unrecognized XLSX layouts unless a supported adapter is added.

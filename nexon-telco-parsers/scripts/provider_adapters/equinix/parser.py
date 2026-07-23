@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from provider_adapters.common import build_result, decimal_amount, make_line
@@ -79,7 +79,7 @@ def _line(
 ) -> dict:
     extra = {"service_location": service_location}
     if infrastructure_cost is not None:
-        extra["infrastructure_cost"] = f"{infrastructure_cost.quantize(Decimal('0.01'))}"
+        extra["infrastructure_cost"] = f"{infrastructure_cost.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}"
     return make_line(
         context=context,
         source_file=source_file,
@@ -91,7 +91,7 @@ def _line(
         invoice_date=period_start,
         billing_period_start=period_start,
         billing_period_end=period_end,
-        amount=f"{amount.quantize(Decimal('0.01'))}",
+        amount=f"{amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}",
         charge_type=charge_type,
         detail_description=description,
         service_type=service_type,
