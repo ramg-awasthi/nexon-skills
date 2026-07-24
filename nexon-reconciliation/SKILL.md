@@ -16,8 +16,10 @@ rows only to `nexon-recon-exception-investigator`.
 - Use only the `Nexon Reconciliation Automation` SharePoint site at
   `/sites/NexonReconciliationAutomation` and its resolver-validated default
   document library.
-- Use native SharePoint tools for listing, cloud move/copy, and uploads. Capture
-  tool-returned item URLs for receipts; do not create share links.
+- Use native SharePoint tools for site discovery, cloud move/copy, and uploads.
+  Do not browse or select source files manually. The deterministic SharePoint
+  file index owns source discovery and exact selection. Capture tool-returned
+  item URLs for cloud-action receipts; do not create share links.
 - Use the approved binary-capable connector for ZIP, PDF, XLSX, and other binary downloads.
 - Never parse invoices with model reasoning or invent rows.
 - Never use parser-only output as a customer reconciliation result.
@@ -33,6 +35,7 @@ Site: Nexon Reconciliation Automation
 Path: /sites/NexonReconciliationAutomation
 Library: the site's default document library
 Upload: /recon-upload-space/<provider>/
+Reference: /recon-reference-space/<provider>/
 Result: /recon-result-space/<provider>/<yyyy>/<MM>/<run_id>/
 ```
 
@@ -59,14 +62,62 @@ Run ID:
 
 ## Source Intake
 
-Resolve exactly one cloud source item. Download and checksum its binary bytes before moving it.
-Pin the download to the selected item ID and retain the connector's provenance
-receipt. If the active access profile changes, discard the target binding and
-resolve it again.
+Branch on intake mode first. For `provider_api`, require the approved adapter
+and run `provider_api_download.py`; do not index SharePoint. For
+`manual_upload`, call one deterministic `stage` operation. It indexes the
+complete approved source space, applies only explicit user constraints, and
+automatically downloads when exactly one candidate remains:
+
+```text
+python skills/nexon-reconciliation/scripts/sharepoint_file_index.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
+  --binding <sharepoint_target_binding.json> \
+  --auth-mode auth_proxy \
+  stage \
+  --space <upload|reference> \
+  [--provider <provider>] \
+  [--source-name <exact_source_name>] \
+  [--all] \
+  --index <sharepoint_file_index.json> \
+  --destination <staged_file> \
+  --receipt <download_receipt.json> \
+  --output <stage_result.json>
+```
+
+Read only the sanitized `stage_result.json`:
+
+- `staged`: pass the known receipt path to `run_recon.py`.
+- `source_not_found`: stop.
+- `selection_required`: ask the user to select one sanitized candidate, then
+  rerun `stage` with `--selection-id`, the returned
+  `--expected-index-sha256`, and the unchanged index.
+- `selection_limit_exceeded`: ask the user to narrow by provider or exact
+  filename; do not rank or display a partial candidate list.
+- `batch_plan_ready`: process one selection at a time and only when the user
+  explicitly requested all matching uploads.
+
+`upload` is the normal manual-intake space. `reference` is allowed only when
+`run_mode=parser_validation` for an explicit non-production fixture test. Both
+SharePoint spaces use the same indexing, identity validation, binary download,
+checksum, and receipt mechanism. If the active access profile changes, discard
+both the target binding and index and resolve them again.
+
+Never browse provider folders or ask the model to inspect the raw index.
+Candidate choices never expose Graph identity. After staging, the stage result's
+machine-use source item ID may be passed verbatim only to the native SharePoint
+move; do not present it to the user or use it for selection. The opaque
+selection ID is only a lookup handle, and the script revalidates the hidden
+identity before download.
+
+Candidate eligibility follows the parser contracts: AAPT ZIP;
+Telstra/Vocus/Megaport CSV or ZIP; Optus PDF, DAT, or ZIP; Equinix XLSX or ZIP.
+Only the six approved provider roots are traversed, and user-facing candidate
+and batch results are limited to 50 entries.
 
 - `parser_validation` always copies locally and leaves the cloud source unchanged.
-- `manual_upload` reconciliation moves the cloud source into the run `source/`
-  folder only after binary staging succeeds and the run ID exists.
+- `manual_upload` reconciliation always uses `upload` and moves the cloud source
+  into the run `source/` folder only after binary staging succeeds and the run
+  ID exists.
 - `provider_api` reconciliation does not perform a SharePoint source move.
 
 Do not create missing SharePoint root/provider folders during a run.

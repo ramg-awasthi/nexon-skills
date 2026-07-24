@@ -11,9 +11,12 @@ Do not use packaging or plugin research to change runtime reconciliation behavio
 
 ## SharePoint Runtime
 
-Runtime SharePoint listing, movement, upload, and returned item URLs use the native SharePoint
-tool. Binary source download uses the deterministic connector through the active
-Fleet SharePoint access profile.
+Runtime SharePoint site discovery, movement, upload, and returned item URLs use
+the native SharePoint tool. `sharepoint_file_index.py` exclusively owns source
+inventory, candidate resolution, opaque selection IDs, item identity pinning,
+and binary download through the active Fleet SharePoint access profile. Its raw
+index records the source path, item ID, size, eTag, and validated site/drive
+binding; the agent receives only sanitized candidate metadata.
 
 The runtime contract requires site name `Nexon Reconciliation Automation`, path
 `/sites/NexonReconciliationAutomation`, and the site's default document library.

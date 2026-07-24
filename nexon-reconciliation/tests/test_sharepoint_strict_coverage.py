@@ -90,12 +90,29 @@ def test_drive_and_graph_request_variants(monkeypatch: pytest.MonkeyPatch) -> No
         connector._graph_request("GET", "/drives/drive-id/items/item-1")
         == b"response"
     )
+    assert (
+        connector._graph_request(
+            "GET",
+            "/drives/drive-id/items/item-1/content",
+            if_match='"etag-1"',
+        )
+        == b"response"
+    )
+    for invalid_etag in ("", "bad\rvalue", "bad\nvalue"):
+        with pytest.raises(RuntimeError, match="sharepoint_etag_invalid"):
+            connector._graph_request(
+                "GET",
+                "/drives/drive-id/items/item-1/content",
+                if_match=invalid_etag,
+            )
 
     none_request, request_timeout = requests[0]
     assert request_timeout == 180
     assert none_request.data is None
     assert none_request.get_header("Content-type") is None
     assert none_request.get_header("Authorization") is None
+    conditional_request, _ = requests[1]
+    assert conditional_request.get_header("If-match") == '"etag-1"'
 
     def failed_urlopen(*_args: object, **_kwargs: object) -> FakeResponse:
         raise graph_error(429, b"retry later")
@@ -162,13 +179,37 @@ def test_graph_route_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert connector._graph_json("GET", root_item_path)["id"] == "item-1"
     assert connector._AUTHORIZED_ITEM_IDS == {"item-1"}
+    monkeypatch.setattr(
+        connector,
+        "_graph_request",
+        lambda *_args: (
+            b'{"value":[{"id":"folder-1"},{"name":"missing-id"},7]}'
+        ),
+    )
+    children_path = (
+        "/drives/drive-id/items/item-1/children?$top=200"
+    )
+    connector._graph_json("GET", children_path)
+    assert connector._AUTHORIZED_ITEM_IDS == {"item-1", "folder-1"}
     assert connector._graph_path_allowed("/sites/tenant,site,web")
     assert connector._graph_path_allowed("/drives/drive-id")
+    assert not connector._graph_path_allowed(
+        "https://graph.microsoft.com/v1.0/drives/drive-id"
+    )
     assert connector._graph_path_allowed(
         "/drives/drive-id/root:/recon-upload-space/AAPT/invoice.zip:"
     )
     assert connector._graph_path_allowed(
+        "/drives/drive-id/root:/recon-upload-space:"
+    )
+    assert connector._graph_path_allowed(
+        "/drives/drive-id/root:/recon-reference-space/AAPT/invoice.zip:"
+    )
+    assert connector._graph_path_allowed(
         "/drives/drive-id/root:/recon-result-space/AAPT/run/report.xlsx:"
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/root:/recon-upload-space:?x=1"
     )
     assert not connector._graph_path_allowed(
         "/drives/drive-id/root:/Shared/other.txt:"
@@ -181,6 +222,33 @@ def test_graph_route_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert connector._graph_path_allowed("/drives/drive-id/items/item-1")
     assert connector._graph_path_allowed("/drives/drive-id/items/item-1/content")
+    assert connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$top=200"
+    )
+    assert connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$skiptoken=next"
+    )
+    assert connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$top=200&$skiptoken=next"
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children"
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$top=100"
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$top="
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$top=200&$top=200"
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/items/folder-1/children?$expand=thumbnails"
+    )
+    assert not connector._graph_path_allowed(
+        "/drives/drive-id/items/unpinned/children?$top=200"
+    )
     assert not connector._graph_path_allowed("/drives/drive-id/items/unpinned")
     assert not connector._graph_path_allowed(
         "/drives/drive-id/items/item-1?expand=children"

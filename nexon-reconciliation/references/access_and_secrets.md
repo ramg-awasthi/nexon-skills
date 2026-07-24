@@ -4,10 +4,10 @@ Authoritative setup details live in `../../../docs/OPERATIONS.md`.
 
 ## SharePoint Access
 
-Use the native SharePoint tool for listing, selection, movement, and artifact
-upload. Capture tool-returned item URLs for receipts. Use the binary connector
-through the active SharePoint access profile
-to download ZIP, PDF, XLSX, and other binary sources. Credentials stay in the
+Use the native SharePoint tool for site discovery, controlled movement, and
+artifact upload. Capture tool-returned item URLs for cloud-action receipts.
+Use `sharepoint_file_index.py` through the active SharePoint access profile for
+source discovery, exact selection, and binary download. Credentials stay in the
 profile and are not passed through prompts or files.
 
 The only approved logical storage target is:
@@ -27,11 +27,24 @@ the binding. Stop if the exact site name and path are absent or ambiguous.
 
 The native SharePoint tool must handle:
 
-- listing provider upload/result folders;
 - moving the original uploaded source package into the run `source/` folder;
 - uploading raw reports, refined reports, evidence, logs, and manifests.
 
-The binary connector must download the selected source without text decoding and verify its checksum. Download and checksum must complete before the native SharePoint tool moves the cloud source into a run folder.
+The deterministic stage connector indexes the entire approved `upload` or
+`reference` space. It automatically stages one match, returns sanitized choices
+for multiple matches, and stops for none. Graph identifiers remain in the raw
+index and receipt; the agent reads only the controlled stage result. Download and
+checksum must complete before the native SharePoint tool moves an operational
+upload into a run folder. A reference fixture is never moved or deleted.
+
+Candidate results contain no Graph identity. After successful staging, the
+stage result may expose the selected source item ID only as a machine-use value
+for the native SharePoint move; it must not be shown to the user or used to
+choose a source.
+
+Opaque selection continuation requires both the selected ID and the exact index
+SHA-256 returned with the choices. The script rejects a changed index before
+resolving or downloading the source.
 
 If the native SharePoint tool cannot confirm permissions, stop with `setup_incomplete`.
 
@@ -58,8 +71,8 @@ Use the native Outlook Send Email tool for failure email notifications when enab
 
 SharePoint:
 
-1. Native SharePoint tool for listing, moves, uploads, and returned item URLs.
-2. Profile-backed deterministic Graph connector for binary download.
+1. Native SharePoint tool for site discovery, moves, uploads, and returned item URLs.
+2. Profile-backed deterministic Graph index for source discovery, exact selection, and binary download.
 3. Stop if either required path lacks permissions or required file operations.
 
 Billing/Inomial:

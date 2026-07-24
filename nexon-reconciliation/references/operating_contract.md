@@ -50,6 +50,10 @@ Every run:
 - `logs/parser_warnings.json`
 - `normalized/provider_lines.json`
 
+Fleet indexed source intake:
+
+- `manifest/sharepoint_file_index.json`
+
 Reconciliation:
 
 - `evidence/billing_candidates.json`

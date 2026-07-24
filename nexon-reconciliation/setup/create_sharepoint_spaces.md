@@ -28,6 +28,18 @@ Create upload folders:
   Equinix/
 ```
 
+Create non-production reference folders:
+
+```text
+/recon-reference-space/
+  AAPT/
+  Telstra/
+  Optus/
+  Vocus/
+  Megaport/
+  Equinix/
+```
+
 Create result roots:
 
 ```text
@@ -58,7 +70,7 @@ Create result roots:
 - Configure the Fleet SharePoint access profile for the same tenant and grant the
   application `Sites.Selected` plus site-level `read`.
 - Confirm the native SharePoint tool can list, upload, and move files in the fixed
-  upload/result spaces, and confirm the profile-backed binary connector can
+  upload/result spaces, and confirm the deterministic file-index connector can
   download a test ZIP/PDF/XLSX without changing its checksum.
 - Store provider API and DB credentials in the profile secret store or environment secret manager.
 - Do not store secrets in `config/recon_settings.yaml`, prompts, reports, manifests, or logs.
@@ -78,6 +90,9 @@ Expected result:
 - `db_update_enabled=false`.
 - All six providers are configured.
 
+Separately confirm through the native SharePoint tool that all upload,
+reference, and result provider roots exist.
+
 For local or mounted-folder testing only, run:
 
 ```text
@@ -90,5 +105,8 @@ Expected result:
 - All provider result roots exist under the fixed `/recon-result-space` test root.
 
 For real SharePoint, folder existence and writability must be checked through the native LangSmith SharePoint tool during environment setup. The local validator does not silently create or mutate SharePoint folders.
+
+Treat `/recon-reference-space` as immutable test-fixture storage. A reference
+validation may download from it but must never move, rename, or delete its source.
 
 If validation fails, fix setup before running reconciliation.

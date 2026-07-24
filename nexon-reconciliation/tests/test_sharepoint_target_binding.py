@@ -398,16 +398,65 @@ def test_download_receipt_and_live_publication_verification(
         "byte_count": source.stat().st_size,
         "downloaded_sha256": sha256_file(source),
     }
+    source_index = tmp_path / "source-index.json"
+    source_index.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "space": "upload",
+                "site_id": valid_binding()["site_id"],
+                "drive_id": valid_binding()["drive_id"],
+                "binding_sha256": sha256_file(binding_path),
+                "files": [
+                    {
+                        "provider": "AAPT",
+                        "name": source.name,
+                        "sharepoint_path": (
+                            "/recon-upload-space/AAPT/invoice.zip"
+                        ),
+                        "item_id": "item-1",
+                        "size": source.stat().st_size,
+                        "etag": "etag-item-1",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt.update(
+        {
+            "space": "upload",
+            "source_path": "/recon-upload-space/AAPT/invoice.zip",
+            "source_etag": "etag-item-1",
+            "index_path": str(source_index.resolve()),
+            "index_sha256": sha256_file(source_index),
+        }
+    )
     receipt_path = tmp_path / "download.json"
+    write_json(receipt_path, receipt)
+
+    missing_item_id = dict(receipt)
+    missing_item_id["source_item_id"] = ""
+    write_json(receipt_path, missing_item_id)
+    with pytest.raises(RuntimeError, match="source_item_id is required"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+        )
     write_json(receipt_path, receipt)
     metadata = {
         "id": "item-1",
         "webUrl": source_url,
+        "size": source.stat().st_size,
+        "eTag": "etag-item-1",
         "parentReference": {"driveId": "drive-id"},
     }
     monkeypatch.setattr(connector, "_graph_json", lambda *_args: metadata)
     monkeypatch.setattr(
-        connector, "_graph_request", lambda *_args: source.read_bytes()
+        connector, "_graph_request", lambda *_args, **_kwargs: source.read_bytes()
     )
     assert run_recon._verify_download_receipt(
         receipt_path=receipt_path,
@@ -417,6 +466,138 @@ def test_download_receipt_and_live_publication_verification(
         auth_mode="auth_proxy",
     )["source_item_id"] == "item-1"
 
+    reference_url = source_url.replace(
+        "recon-upload-space/AAPT/",
+        "recon-reference-space/AAPT/approved/",
+    )
+    reference_index = json.loads(source_index.read_text(encoding="utf-8"))
+    reference_index["space"] = "reference"
+    reference_index["files"][0]["sharepoint_path"] = (
+        "/recon-reference-space/AAPT/approved/invoice.zip"
+    )
+    source_index.write_text(json.dumps(reference_index), encoding="utf-8")
+    reference_receipt = {
+        **receipt,
+        "space": "reference",
+        "source_path": "/recon-reference-space/AAPT/approved/invoice.zip",
+        "source_web_url": reference_url,
+        "index_path": str(source_index.resolve()),
+        "index_sha256": sha256_file(source_index),
+    }
+    write_json(receipt_path, reference_receipt)
+    reference_metadata = {**metadata, "webUrl": reference_url}
+    monkeypatch.setattr(connector, "_graph_json", lambda *_args: reference_metadata)
+    assert run_recon._verify_download_receipt(
+        receipt_path=receipt_path,
+        binding_path=binding_path,
+        source_file=source,
+        provider="AAPT",
+        auth_mode="auth_proxy",
+        allowed_spaces=("upload", "reference"),
+    )["space"] == "reference"
+
+    mismatched_binding_index = json.loads(
+        source_index.read_text(encoding="utf-8")
+    )
+    mismatched_binding_index["site_id"] = "wrong-site"
+    source_index.write_text(
+        json.dumps(mismatched_binding_index), encoding="utf-8"
+    )
+    mismatched_binding_receipt = {
+        **reference_receipt,
+        "index_sha256": sha256_file(source_index),
+    }
+    write_json(receipt_path, mismatched_binding_receipt)
+    with pytest.raises(RuntimeError, match="source index binding does not match"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+            allowed_spaces=("upload", "reference"),
+        )
+
+    unproven_index = dict(reference_index)
+    unproven_index["files"] = [
+        {**reference_index["files"][0], "item_id": "different-item"}
+    ]
+    source_index.write_text(json.dumps(unproven_index), encoding="utf-8")
+    unproven_receipt = {
+        **reference_receipt,
+        "index_sha256": sha256_file(source_index),
+    }
+    write_json(receipt_path, unproven_receipt)
+    with pytest.raises(RuntimeError, match="not uniquely proven by the index"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+            allowed_spaces=("upload", "reference"),
+        )
+
+    source_index.write_text(json.dumps(reference_index), encoding="utf-8")
+    reference_receipt["index_sha256"] = sha256_file(source_index)
+    write_json(receipt_path, reference_receipt)
+    with pytest.raises(RuntimeError, match="source space is not allowed"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+        )
+
+    incomplete_index = dict(reference_receipt)
+    incomplete_index.pop("index_path")
+    write_json(receipt_path, incomplete_index)
+    with pytest.raises(RuntimeError, match="indexed source provenance is incomplete"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+            allowed_spaces=("upload", "reference"),
+        )
+
+    changed_index = dict(reference_receipt)
+    changed_index["index_sha256"] = "0" * 64
+    write_json(receipt_path, changed_index)
+    with pytest.raises(RuntimeError, match="source index is missing or changed"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+            allowed_spaces=("upload", "reference"),
+        )
+
+    outside_provider = {
+        **reference_receipt,
+        "source_path": "/recon-reference-space/Optus/invoice.zip",
+    }
+    write_json(receipt_path, outside_provider)
+    with pytest.raises(RuntimeError, match="outside the provider space"):
+        run_recon._verify_download_receipt(
+            receipt_path=receipt_path,
+            binding_path=binding_path,
+            source_file=source,
+            provider="AAPT",
+            auth_mode="auth_proxy",
+            allowed_spaces=("upload", "reference"),
+        )
+
+    upload_index = json.loads(source_index.read_text(encoding="utf-8"))
+    upload_index["space"] = "upload"
+    upload_index["files"][0]["sharepoint_path"] = (
+        "/recon-upload-space/AAPT/invoice.zip"
+    )
+    source_index.write_text(json.dumps(upload_index), encoding="utf-8")
+    receipt["index_sha256"] = sha256_file(source_index)
     bad = dict(receipt)
     bad["provider"] = "Optus"
     write_json(receipt_path, bad)
@@ -445,7 +626,9 @@ def test_download_receipt_and_live_publication_verification(
         )
 
     monkeypatch.setattr(connector, "_graph_json", lambda *_args: metadata)
-    monkeypatch.setattr(connector, "_graph_request", lambda *_args: b"different")
+    monkeypatch.setattr(
+        connector, "_graph_request", lambda *_args, **_kwargs: b"different"
+    )
     with pytest.raises(RuntimeError, match="staged bytes"):
         run_recon._verify_download_receipt(
             receipt_path=receipt_path,
@@ -460,8 +643,17 @@ def test_download_receipt_and_live_publication_verification(
         "sharepoint_url": source_url,
         "sha256": hashlib.sha256(b"published").hexdigest(),
     }
+    with pytest.raises(RuntimeError, match="outside the bound document library"):
+        run_recon._verify_published_item(
+            item=published,
+            expected_url="https://tenant.sharepoint.com/sites/Other/file.xlsx",
+            expected_sha256=published["sha256"],
+            binding=valid_binding(),
+        )
     monkeypatch.setattr(connector, "_graph_json", lambda *_args: metadata)
-    monkeypatch.setattr(connector, "_graph_request", lambda *_args: b"published")
+    monkeypatch.setattr(
+        connector, "_graph_request", lambda *_args, **_kwargs: b"published"
+    )
     run_recon._verify_published_item(
         item=published,
         expected_url=source_url,
@@ -481,7 +673,9 @@ def test_download_receipt_and_live_publication_verification(
             binding=valid_binding(),
         )
     monkeypatch.setattr(connector, "_graph_json", lambda *_args: metadata)
-    monkeypatch.setattr(connector, "_graph_request", lambda *_args: b"wrong")
+    monkeypatch.setattr(
+        connector, "_graph_request", lambda *_args, **_kwargs: b"wrong"
+    )
     with pytest.raises(RuntimeError, match="content checksum"):
         run_recon._verify_published_item(
             item=published,
@@ -529,6 +723,56 @@ def test_profile_preflight_and_graph_binding_gate(
         connector.main()
 
 
+def test_profile_preflight_live_identity_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_path = tmp_path / "binding.json"
+    binding_path.write_text(json.dumps(valid_binding()), encoding="utf-8")
+    config = {
+        "features": {"db_update_enabled": False},
+        "billing": {"audit_required": True},
+        "provider_api_adapters": {},
+    }
+    output = tmp_path / "capabilities.json"
+    monkeypatch.setattr(preflight_check, "load_config", lambda _path: config)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "preflight_check.py",
+            "--sharepoint-binding",
+            str(binding_path),
+            "--output",
+            str(output),
+        ],
+    )
+    responses = iter(
+        [
+            {
+                "id": valid_binding()["site_id"],
+                "webUrl": valid_binding()["site_url"],
+            },
+            {
+                "id": valid_binding()["drive_id"],
+                "webUrl": valid_binding()["drive_web_url"],
+            },
+        ]
+    )
+    monkeypatch.setattr(connector, "_graph_json", lambda *_args: next(responses))
+    assert preflight_check.main() == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["capabilities"][
+        "binary_source_staging"
+    ] is True
+
+    monkeypatch.setattr(
+        connector,
+        "_graph_json",
+        lambda *_args: {"id": "wrong", "webUrl": "https://wrong.invalid"},
+    )
+    with pytest.raises(RuntimeError, match="profile_site_mismatch"):
+        preflight_check.main()
+
+
 def test_run_frozen_binding_identity_and_tamper_gate(tmp_path: Path) -> None:
     run_root = tmp_path / "AAPT" / "2026" / "07" / "aapt_20260723_120000_ABCDE"
     manifest = run_root / "manifest"
@@ -553,6 +797,31 @@ def test_run_frozen_binding_identity_and_tamper_gate(tmp_path: Path) -> None:
     frozen_path.write_text(json.dumps({**frozen, "drive_name": "Changed"}), encoding="utf-8")
     with pytest.raises(RuntimeError, match="binding_changed"):
         run_recon._publication_target(run_root)
+
+
+def test_source_index_freeze_and_tamper_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_root = tmp_path / "run"
+    (run_root / "manifest").mkdir(parents=True)
+    source_index = tmp_path / "source-index.json"
+    source_index.write_text('{"contract_version":1}', encoding="utf-8")
+    receipt = {
+        "_verified_index_path": str(source_index),
+        "index_sha256": sha256_file(source_index),
+    }
+    assert run_recon._freeze_source_index(run_root, {}) is None
+    assert run_recon._freeze_source_index(run_root, receipt) == sha256_file(
+        source_index
+    )
+    assert (run_root / "manifest" / "sharepoint_file_index.json").is_file()
+
+    def corrupt_copy(_source: str, destination: Path) -> None:
+        destination.write_text("changed", encoding="utf-8")
+
+    monkeypatch.setattr(run_recon.shutil, "copy2", corrupt_copy)
+    with pytest.raises(RuntimeError, match="frozen source index checksum changed"):
+        run_recon._freeze_source_index(run_root, receipt)
 
 
 def test_resolver_main_and_wrapper(

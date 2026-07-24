@@ -53,6 +53,8 @@ def _new_run(
     result_root = root / "results"
     (result_root / "AAPT").mkdir(parents=True)
     harness = RuntimeHarness(matched)
+    source_index = root / "sharepoint-file-index.json"
+    source_index.write_text('{"contract_version":1}', encoding="utf-8")
     args = _args(
         source=source,
         result_root=result_root,
@@ -75,7 +77,12 @@ def _new_run(
         patch.object(
             run_recon,
             "_verify_download_receipt",
-            return_value={"source_item_id": "source-item"},
+            return_value={
+                "source_item_id": "source-item",
+                "space": "upload",
+                "index_sha256": sha256_file(source_index),
+                "_verified_index_path": str(source_index.resolve()),
+            },
         ),
         patch.object(run_recon, "_run_command", side_effect=harness.command),
         persistence_patch,
@@ -304,6 +311,13 @@ class RunReconRemainingBranchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "parser_validation requires --copy"):
             run_recon.run(parser_args)
 
+        parser_api_args = _args(run_mode="parser_validation")
+        parser_api_args.intake_mode = "provider_api"
+        with self.assertRaisesRegex(
+            RuntimeError, "parser_validation supports manual_upload"
+        ):
+            run_recon.run(parser_api_args)
+
         recon_args = _args(run_mode="reconciliation")
         recon_args.copy = True
         with self.assertRaisesRegex(RuntimeError, "reconciliation must move"):
@@ -313,6 +327,48 @@ class RunReconRemainingBranchTests(unittest.TestCase):
         unavailable_api_args.intake_mode = "provider_api"
         with self.assertRaisesRegex(RuntimeError, "provider_api_not_available"):
             run_recon.run(unavailable_api_args)
+
+        available_api_args = _args(run_mode="reconciliation")
+        available_api_args.intake_mode = "provider_api"
+        enabled_api_config = {
+            "features": {
+                "db_update_enabled": False,
+                "provider_api_enabled": True,
+            },
+            "billing": {"audit_required": True},
+            "provider_api_adapters": {"aapt": True},
+        }
+        with (
+            patch.object(run_recon, "load_config", return_value=enabled_api_config),
+            patch.object(run_recon, "capability_manifest", return_value=_all_capabilities()),
+            patch.object(run_recon, "_validate_provider_api_provenance") as provenance,
+            self.assertRaisesRegex(RuntimeError, "run_input_missing"),
+        ):
+            run_recon.run(available_api_args)
+        provenance.assert_called_once_with(available_api_args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "invoice.csv"
+            source.write_text("invoice", encoding="utf-8")
+            args = _args(
+                source=source,
+                result_root=root / "results",
+                run_mode="parser_validation",
+                local_only=False,
+            )
+            args.source_download_receipt = None
+            with (
+                patch.object(
+                    run_recon,
+                    "capability_manifest",
+                    return_value=_all_capabilities(),
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError, "source_download_receipt_required"
+                ),
+            ):
+                run_recon.run(args)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
