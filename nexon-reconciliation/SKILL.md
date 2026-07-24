@@ -29,7 +29,7 @@ to `nexon-recon-exception-investigator`.
 - Never parse invoices with model reasoning or invent rows.
 - Never use parser-only output as a customer reconciliation result.
 - Never let an agent write directly to a database.
-- Use Nexon Recon SQL MCP for every Fleet database read or lifecycle write.
+- Use Nexon Recon Database MCP for every Fleet database read or lifecycle write.
 - Keep DSNs and direct database adapters confined to `--local-only` tests.
 - Keep `db_update_enabled=false` without a controlled approval artifact.
 - Keep credentials out of prompts and artifacts. Customer query values may

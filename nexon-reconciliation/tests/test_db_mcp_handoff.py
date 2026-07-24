@@ -68,7 +68,7 @@ def write(path: Path, payload: object) -> Path:
 
 def test_validate_database_mcp_contract() -> None:
     capabilities = {
-        "service": "nexon-recon-sql-mcp",
+        "service": "nexon-recon-db-mcp",
         "environment": "dev",
         "capabilities": {
             "read_queries": True,
@@ -262,7 +262,7 @@ db_update_policy:
     database_capabilities = write(
         tmp_path / "database-capabilities.json",
         {
-            "service": "nexon-recon-sql-mcp",
+            "service": "nexon-recon-db-mcp",
             "environment": "dev",
             "capabilities": {
                 "read_queries": True,

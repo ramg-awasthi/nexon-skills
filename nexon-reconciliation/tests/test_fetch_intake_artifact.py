@@ -211,6 +211,30 @@ class FetchIntakeArtifactTests(unittest.TestCase):
                     receipt, expected_public_key="wrong"
                 )
 
+    def test_temporary_file_creation_failure_preserves_original_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_key, prepared, _signing_key = material(root)
+            preparation_path = self._write(root, prepared)
+            destination = root / "staged" / "invoice.zip"
+
+            with (
+                patch.object(
+                    fetcher.tempfile,
+                    "mkstemp",
+                    side_effect=OSError("temporary storage unavailable"),
+                ),
+                self.assertRaisesRegex(OSError, "temporary storage unavailable"),
+            ):
+                fetcher.fetch_artifact(
+                    preparation_path=preparation_path,
+                    private_key_path=private_key,
+                    destination=destination,
+                    config=config(),
+                )
+
+            self.assertFalse(destination.exists())
+
     def test_contract_and_endpoint_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
