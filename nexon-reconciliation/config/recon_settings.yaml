@@ -1,5 +1,12 @@
 timezone: Australia/Sydney
 
+sharepoint_intake:
+  environment: dev
+  gateway_host: nexon-recon-sharepoint-dev.netbird.aaic.cc
+
+database_mcp:
+  environment: dev
+
 profiles:
   billing_profile: nexon-recon-profile
   provider_api_profile: nexon-recon-profile

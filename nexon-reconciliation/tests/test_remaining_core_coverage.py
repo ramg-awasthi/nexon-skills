@@ -12,7 +12,11 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from recon_core import billing_query, intake_run, preflight_check, write_reports  # noqa: E402
-from recon_core.common import EXCLUDED_PHASE1_COLUMNS, RAW_WORKBOOK_COLUMNS  # noqa: E402
+from recon_core.common import (  # noqa: E402
+    EXCLUDED_PHASE1_COLUMNS,
+    RAW_WORKBOOK_COLUMNS,
+    write_json,
+)
 
 
 @pytest.mark.parametrize(
@@ -92,17 +96,81 @@ def test_preflight_remaining_main_paths(tmp_path: Path, capsys: pytest.CaptureFi
         "features": {"db_update_enabled": False},
         "billing": {"audit_required": True},
         "provider_api_adapters": {},
+        "sharepoint_intake": {
+            "environment": "dev",
+            "gateway_host": "nexon-recon-sharepoint-dev.netbird.aaic.cc",
+        },
     }
     output = tmp_path / "capabilities.json"
+    mcp_capabilities = tmp_path / "mcp-capabilities.json"
+    mcp_probe = tmp_path / "mcp-probe.json"
+    write_json(
+        mcp_capabilities,
+        {
+            "schema_version": "1.0",
+            "kind": "capabilities",
+            "result": {
+                "status": "ok",
+                "environment": "dev",
+                "read_only": True,
+                "download_contract_version": 1,
+                "tools": sorted(preflight_check.SHAREPOINT_INTAKE_TOOLS),
+                "binary_delivery": {
+                    "method": "POST",
+                    "endpoint": "https://nexon-recon-sharepoint-dev.netbird.aaic.cc/download",
+                    "ticket_header": "X-Recon-Download-Ticket",
+                    "single_use": True,
+                },
+                "attestation": {
+                    "algorithm": "Ed25519",
+                    "public_key": "A" * 43,
+                    "public_key_sha256": "a" * 64,
+                },
+                "limits": {"max_candidates": 50},
+                "providers": {
+                    name: sorted(extensions)
+                    for name, extensions in preflight_check.EXPECTED_PROVIDER_EXTENSIONS.items()
+                },
+            },
+        },
+    )
+    write_json(
+        mcp_probe,
+        {
+            "schema_version": "1.0",
+            "kind": "probe",
+            "result": {
+                "status": "ok",
+                "environment": "dev",
+                "reachable": True,
+                "site_name": "Nexon Reconciliation Automation",
+                "hostname": "tenant.sharepoint.com",
+                "path": "/sites/NexonReconciliationAutomation",
+                "spaces": ["upload", "reference", "result"],
+            },
+        },
+    )
 
     with (
-        patch.object(sys, "argv", ["preflight_check.py", "--output", str(output)]),
+        patch.object(
+            sys,
+            "argv",
+            [
+                "preflight_check.py",
+                "--sharepoint-mcp-capabilities",
+                str(mcp_capabilities),
+                "--sharepoint-mcp-probe",
+                str(mcp_probe),
+                "--output",
+                str(output),
+            ],
+        ),
         patch.object(preflight_check, "load_config", return_value=base_config),
         patch.object(preflight_check, "sharepoint_roots", return_value=(tmp_path, tmp_path)),
     ):
         assert preflight_check.main() == 0
     assert output.is_file()
-    assert "SharePoint permissions" in capsys.readouterr().out
+    assert "SharePoint Intake MCP receipts validated" in capsys.readouterr().out
 
     invalid_config = {**base_config, "provider_api_adapters": {"unknown": True}}
     with (

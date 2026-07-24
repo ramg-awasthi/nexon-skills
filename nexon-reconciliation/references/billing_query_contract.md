@@ -15,7 +15,9 @@ billing:
 
 ## Execution Boundary
 
-`scripts/billing_query.py` is the only billing lookup command.
+Fleet billing lookup uses only `recon_db_read_query` through the frozen
+request/receipt handoff emitted by `run_recon.py`. `scripts/billing_query.py`
+is retained only as the deterministic `--local-only` test adapter.
 
 It enforces:
 

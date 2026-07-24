@@ -1,101 +1,87 @@
 # Access And Secrets
 
-Authoritative setup details live in `../../../docs/OPERATIONS.md`.
+## SharePoint Boundaries
 
-## SharePoint Access
-
-Use the native SharePoint tool for site discovery, controlled movement, and
-artifact upload. Capture tool-returned item URLs for cloud-action receipts.
-Use `sharepoint_file_index.py` through the active SharePoint access profile for
-source discovery, exact selection, and binary download. Credentials stay in the
-profile and are not passed through prompts or files.
-
-The only approved logical storage target is:
+SharePoint Intake MCP holds the read-only SharePoint application credential.
+Fleet receives only five tools:
 
 ```text
-Site: Nexon Reconciliation Automation
-Site path: /sites/NexonReconciliationAutomation
-Library: the site's default document library
+recon_sp_get_capabilities
+recon_sp_probe
+recon_sp_index_sources
+recon_sp_prepare_download
+recon_sp_prepare_reference_test
 ```
 
-Tenant hostname, site ID, drive ID, and library URL come only from
-`resolve_sharepoint_target.py`. The resolver cross-checks the native SharePoint
-site listing against the active access profile, then creates a validated binding.
-Do not route normal runs to the personal OneDrive `Recon` folder, the
-`Account Recon` site, or any alternate site found by search. Do not hand-author
-the binding. Stop if the exact site name and path are absent or ambiguous.
+The MCP service resolves tenant/site/drive identity internally. Prompts,
+skills, config, agent memory, reports, and run manifests contain no Graph
+credential, site ID, drive ID, or item ID.
 
-The native SharePoint tool must handle:
+Native SharePoint is independently authorized for:
 
-- moving the original uploaded source package into the run `source/` folder;
-- uploading raw reports, refined reports, evidence, logs, and manifests.
+- exact source moves after successful staging;
+- result artifact uploads;
+- setup-time folder validation.
 
-The deterministic stage connector indexes the entire approved `upload` or
-`reference` space. It automatically stages one match, returns sanitized choices
-for multiple matches, and stops for none. Graph identifiers remain in the raw
-index and receipt; the agent reads only the controlled stage result. Download and
-checksum must complete before the native SharePoint tool moves an operational
-upload into a run folder. A reference fixture is never moved or deleted.
+Do not use native text reads for binary sources. Do not create share links,
+change permissions, or delete unrelated items.
 
-Candidate results contain no Graph identity. After successful staging, the
-stage result may expose the selected source item ID only as a machine-use value
-for the native SharePoint move; it must not be shown to the user or used to
-choose a source.
+## One-Time Download Ticket
 
-Opaque selection continuation requires both the selected ID and the exact index
-SHA-256 returned with the choices. The script rejects a changed index before
-resolving or downloading the source.
+The MCP service completely spools and SHA-256 attests the selected bytes before
+returning an unchanged
+`{schema_version: "1.0", kind: "prepared_download", result: ...}` envelope.
+Its result contains the exact environment-specific HTTPS `/download` endpoint
+and a short-lived single-use ticket encrypted to an ephemeral client key.
 
-If the native SharePoint tool cannot confirm permissions, stop with `setup_incomplete`.
+The preparation file is transient secret material:
+
+- write it with restrictive permissions when possible;
+- do not display, summarize, transform, or log it;
+- pass only its file path and the private-key path to
+  `fetch_intake_artifact.py`;
+- delete both before the fetcher redeems the ticket;
+- never retry it after any failure.
+
+The fetcher refuses redirects, sends the decrypted ticket only through
+`X-Recon-Download-Ticket`, and verifies the signed response attestation. Never
+put the private key or ticket in a URL, query, CLI argument, output, exception,
+audit record, or durable receipt.
+
+Durable download receipts contain only provider, space, filename, local path,
+byte count, SHA-256, sanitized index identity, preparation receipt hash, and
+timestamp.
 
 ## Non-SharePoint Secrets
 
-Provider API and billing/Inomial integrations use approved secret-store or
-environment-backed credentials.
+- Database DSNs and credentials stay in the SQL MCP/service environment or
+  approved runtime secret boundary.
+- Provider API credentials stay in provider-specific secret bindings.
+- Outlook credentials remain in the native Outlook connection.
+- Do not store tokens, tickets, signed URLs, SAS links, passwords, provider
+  keys, or transient SharePoint links in durable artifacts. Customer query
+  values may exist only in a frozen MCP request while its run is paused; delete
+  the request and temporary receipts after successful resume, retaining hashes
+  and sanitized logs.
 
-- Do not store credentials in prompts.
-- Do not store credentials in `config/recon_settings.yaml`.
-- Do not store tokens, signed URLs, SAS links, Function codes, DB passwords, provider keys, or native SharePoint transient links in reports/manifests/logs.
-- Redact secrets from exceptions.
-- Scripts receive secret references or environment variables, not literal secrets.
-
-## Outlook Failure Notifications
-
-Use the native Outlook Send Email tool for failure email notifications when enabled. The Outlook path is text-only.
-
-- Do not attach files.
-- Include SharePoint artifact links, report paths, or failure manifest paths in the email body.
-- `notify_failure.py` prepares the sanitized `to`, `subject`, and `body_text`; the supervisor sends those values through the native Outlook tool.
-
-## Preferred Access Order
+## Access Order
 
 SharePoint:
 
-1. Native SharePoint tool for site discovery, moves, uploads, and returned item URLs.
-2. Profile-backed deterministic Graph index for source discovery, exact selection, and binary download.
-3. Stop if either required path lacks permissions or required file operations.
+1. SharePoint Intake MCP for capability, probe, index, prepare, and read-only
+   binary verification.
+2. Native SharePoint for controlled move and upload.
+3. No direct Graph or browser fallback in the runtime path.
 
-Billing/Inomial:
+Invoices:
 
-1. Approved read-only reconciliation DB credentials.
-2. Direct Inomial PostgreSQL only after a separate approval.
-3. UI/browser access only for investigation, not bulk extraction.
+1. Approved provider API where implemented and enabled.
+2. Manual SharePoint upload otherwise.
+3. A separately approved portal acquisition may place a package into upload
+   space, but the run still uses `manual_upload`.
 
-Core reconciliation persistence:
+Database:
 
-1. A separate Azure SQL identity scoped to the existing `Finance` reconciliation tables.
-2. `NEXON_RECON_CORE_MODE=azure_sql` or `sqlserver`.
-3. `NEXON_RECON_CORE_DSN` supplied only through the Fleet secret store.
-4. `sqlite_shadow` only for local tests.
-5. Stop if the identity can alter schema or if the target is not the approved side-by-side/cutover database.
-
-Provider invoices:
-
-1. Provider API adapter where configured and approved.
-2. Manual SharePoint upload through the native SharePoint tool.
-3. Provider portal/browser access is not a normal reconciliation intake mode. Use it only as a separately approved acquisition fallback recorded in the run manifest to place a provider package into the manual SharePoint upload folder; the supervisor still runs the package as `manual_upload`.
-
-Failure notifications:
-
-1. Native Outlook Send Email tool for text-only messages.
-2. No attachments in the notification path.
+1. Approved SQL MCP tools when bound.
+2. Guarded script connector only in an approved runtime.
+3. No free-form database client, browser query, or agent-generated update.

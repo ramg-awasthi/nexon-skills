@@ -27,8 +27,12 @@ from test_orchestrator_validator_lifecycle import (  # noqa: E402
     RuntimeHarness,
     _all_capabilities,
     _args,
+    _capability_receipt,
     _download_receipt,
-    _sharepoint_binding,
+    _finish_fleet_database_handoffs,
+    _fleet_plan,
+    _publication_receipt as _valid_publication_receipt,
+    _publication_verification_receipts,
 )
 
 
@@ -53,8 +57,6 @@ def _new_run(
     result_root = root / "results"
     (result_root / "AAPT").mkdir(parents=True)
     harness = RuntimeHarness(matched)
-    source_index = root / "sharepoint-file-index.json"
-    source_index.write_text('{"contract_version":1}', encoding="utf-8")
     args = _args(
         source=source,
         result_root=result_root,
@@ -77,14 +79,10 @@ def _new_run(
         patch.object(
             run_recon,
             "_verify_download_receipt",
-            return_value={
-                "source_item_id": "source-item",
-                "space": "upload",
-                "index_sha256": sha256_file(source_index),
-                "_verified_index_path": str(source_index.resolve()),
-            },
+            side_effect=lambda **kwargs: read_json(kwargs["receipt_path"]),
         ),
         patch.object(run_recon, "_run_command", side_effect=harness.command),
+        patch.object(run_recon, "prepare_billing_query_plan", side_effect=_fleet_plan),
         persistence_patch,
         patch.dict(
             os.environ,
@@ -96,6 +94,8 @@ def _new_run(
         ),
     ):
         result = run_recon.run(args)
+    if not local_only and run_mode == "reconciliation":
+        result = _finish_fleet_database_handoffs(result, matched=matched)
     return result, Path(result["run_root"])
 
 
@@ -104,59 +104,153 @@ def _resume_args(
     *,
     investigation: Path | None = None,
     publication_receipt: Path | None = None,
+    publication_verification_receipt: list[Path] | None = None,
     local_only: bool = False,
 ) -> Namespace:
     return _args(
         resume_root=run_root,
         investigation=investigation,
         publication_receipt=publication_receipt,
+        publication_verification_receipt=publication_verification_receipt,
         local_only=local_only,
     )
 
 
 def _resume_run(args: Namespace) -> dict:
-    with patch.object(run_recon, "_verify_published_item"):
+    with patch.object(
+        run_recon,
+        "_verify_download_receipt",
+        side_effect=lambda **kwargs: read_json(kwargs["receipt_path"]),
+    ):
         return run_recon.resume_run(args)
 
 
 def _publication_receipt(run_root: Path) -> dict:
-    publication_set = read_json(run_root / "manifest" / "publication_set.json")
-    run_prefix = (
-        f"/recon-result-space/AAPT/{run_root.parent.parent.name}/"
-        f"{run_root.parent.name}/{run_root.name}/"
-    )
-    uploaded = [
-        {
-            "local_path": item["local_path"],
-            "sha256": item["sha256"],
-            "item_id": f"item-{index}",
-            "sharepoint_url": (
-                "https://nexonap.sharepoint.com/sites/"
-                "NexonReconciliationAutomation/Shared%20Documents"
-                f"{run_prefix}{item['relative_path']}"
-            ),
-        }
-        for index, item in enumerate(publication_set["artifacts"], start=1)
-    ]
-    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
-    source_name = Path(run_manifest["source_file"]).name
-    return {
-        "run_id": run_root.name,
-        "uploaded_artifacts": uploaded,
-        "source_move_receipt": {
-            "status": "moved",
-            "item_id": "source-item",
-            "sha256": run_manifest["source_checksum_sha256"],
-            "sharepoint_url": (
-                "https://nexonap.sharepoint.com/sites/"
-                "NexonReconciliationAutomation/Shared%20Documents"
-                f"{run_prefix}source/{source_name}"
-            ),
-        },
-    }
+    return _valid_publication_receipt(run_root)
 
 
 class RunReconRemainingBranchTests(unittest.TestCase):
+    def test_download_receipt_rejection_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "invoice.zip"
+            source.write_bytes(b"PK\x03\x04invoice")
+            receipt_path = _download_receipt(
+                source,
+                relative_path="AAPT/invoice.zip",
+            )
+            valid = read_json(receipt_path)
+            cases = [
+                (
+                    lambda payload: payload.update({"unexpected": True}),
+                    "fields do not match",
+                ),
+                (
+                    lambda payload: payload.update({"contract_version": 2}),
+                    "version, status, provider, or space",
+                ),
+                (
+                    lambda payload: payload.update({"source_name": "other.zip"}),
+                    "local artifact identity",
+                ),
+                (
+                    lambda payload: payload.update({"byte_count": 0}),
+                    "local size or checksum",
+                ),
+                (
+                    lambda payload: payload.update({"index": {}}),
+                    "sanitized index identity",
+                ),
+                (
+                    lambda payload: payload["index"].update(
+                        {"relative_path": "AAPT/other.zip"}
+                    ),
+                    "indexed relative path",
+                ),
+                (
+                    lambda payload: payload.update(
+                        {"preparation_receipt_sha256": "short"}
+                    ),
+                    "preparation identity or timestamp",
+                ),
+            ]
+            for mutation, message in cases:
+                payload = copy.deepcopy(valid)
+                mutation(payload)
+                write_json(receipt_path, payload)
+                with (
+                    self.subTest(message=message),
+                    patch.object(
+                        run_recon,
+                        "verify_receipt_attestation",
+                        return_value={},
+                    ),
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    run_recon._verify_download_receipt(
+                        receipt_path=receipt_path,
+                        provider="AAPT",
+                        allowed_spaces=("upload",),
+                        expected_file=source,
+                        expected_relative_path="AAPT/invoice.zip",
+                    )
+            write_json(receipt_path, valid)
+            with (
+                patch.object(
+                    run_recon,
+                    "verify_receipt_attestation",
+                    return_value={},
+                ) as verify,
+            ):
+                self.assertEqual(
+                    valid,
+                    run_recon._verify_download_receipt(
+                        receipt_path=receipt_path,
+                        provider="AAPT",
+                        allowed_spaces=("upload",),
+                        expected_file=source,
+                        expected_relative_path="AAPT/invoice.zip",
+                        expected_attestation_public_key="public-key",
+                    ),
+                )
+                verify.assert_called_once_with(
+                    valid,
+                    expected_public_key="public-key",
+                )
+            with (
+                patch.object(
+                    run_recon,
+                    "verify_receipt_attestation",
+                    return_value={},
+                ),
+                self.assertRaisesRegex(RuntimeError, "outside the run folder"),
+            ):
+                run_recon._verify_download_receipt(
+                    receipt_path=receipt_path,
+                    provider="AAPT",
+                    allowed_spaces=("upload",),
+                    forbidden_root=root,
+                )
+
+            invalid_capability = root / "invalid-capability.json"
+            write_json(
+                invalid_capability,
+                {
+                    "result": {
+                        "environment": "prod",
+                        "attestation": {
+                            "algorithm": "Ed25519",
+                            "public_key": "key",
+                        },
+                    }
+                },
+            )
+            with self.assertRaisesRegex(RuntimeError, "capability_invalid"):
+                run_recon._sharepoint_capability_identity(
+                    invalid_capability,
+                    run_recon.load_config(CONFIG),
+                )
+
     def test_logical_run_path_contract(self) -> None:
         run_root = (
             Path("C:/sandbox/results")
@@ -413,14 +507,14 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 run_mode="parser_validation",
                 local_only=False,
             )
-            args.sharepoint_binding = None
+            args.source_download_receipt = None
             with (
                 patch.object(
                     run_recon,
                     "capability_manifest",
                     return_value=_all_capabilities(),
                 ),
-                self.assertRaisesRegex(RuntimeError, "sharepoint_binding_required"),
+                self.assertRaisesRegex(RuntimeError, "source_download_receipt_required"),
             ):
                 run_recon.run(args)
 
@@ -548,15 +642,15 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                     },
                     clear=False,
                 ),
-                self.assertRaisesRegex(RuntimeError, "sqlite_shadow_not_allowed"),
+                self.assertRaisesRegex(RuntimeError, "database_mcp_receipts_required"),
             ):
                 args.local_only = False
-                args.sharepoint_binding = _sharepoint_binding(root)
-                args.source_download_receipt = _download_receipt(root)
+                args.source_download_receipt = _download_receipt(source)
+                args.sharepoint_mcp_capabilities = _capability_receipt(root)
                 with patch.object(
                     run_recon,
                     "_verify_download_receipt",
-                    return_value={"source_item_id": "source-item"},
+                    side_effect=lambda **kwargs: read_json(kwargs["receipt_path"]),
                 ):
                     run_recon.run(args)
 
@@ -684,7 +778,10 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             state = read_json(state_path)
             state["run_status"] = "running"
             write_json(state_path, state)
-            with self.assertRaisesRegex(RuntimeError, "not awaiting investigation or publication"):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "not awaiting billing, persistence, investigation, or publication",
+            ):
                 _resume_run(_resume_args(run_root))
 
             state["run_status"] = "completed"
@@ -742,8 +839,12 @@ class RunReconRemainingBranchTests(unittest.TestCase):
 
             cases = [
                 (
+                    lambda payload: payload.update({"unexpected": True}),
+                    "native receipt fields",
+                ),
+                (
                     lambda payload: payload.update({"run_id": "wrong"}),
-                    "receipt run_id",
+                    "native receipt identity",
                 ),
                 (
                     lambda payload: payload.update({"uploaded_artifacts": []}),
@@ -753,7 +854,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                     lambda payload: payload["uploaded_artifacts"][0].update(
                         {"sharepoint_url": "http://example.invalid/wrong"}
                     ),
-                    "artifact URL/item ID",
+                    "receipt requires uploaded_artifacts",
                 ),
                 (
                     lambda payload: payload["uploaded_artifacts"][0].update(
@@ -821,12 +922,59 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             finally:
                 artifact_path.write_bytes(original_artifact)
 
+            write_json(publication_set_path, original_set)
+            write_json(receipt_path, valid)
+            capability_path = (
+                run_root / "manifest" / "sharepoint_mcp_capabilities.json"
+            )
+            capability_bytes = capability_path.read_bytes()
+            capability_sha256 = sha256_file(capability_path)
+            capability_path.unlink()
+            original_sha256_file = run_recon.sha256_file
+
+            def hash_missing_capability(path: Path) -> str:
+                if path.resolve() == capability_path.resolve():
+                    return capability_sha256
+                return original_sha256_file(path)
+
+            try:
+                with (
+                    patch.object(
+                        run_recon,
+                        "sha256_file",
+                        side_effect=hash_missing_capability,
+                    ),
+                    self.assertRaisesRegex(
+                        RuntimeError,
+                        "frozen SharePoint MCP capability is missing",
+                    ),
+                ):
+                    _resume_run(
+                        _resume_args(
+                            run_root,
+                            publication_receipt=receipt_path,
+                            publication_verification_receipt=[],
+                        )
+                    )
+            finally:
+                capability_path.write_bytes(capability_bytes)
+
+            with self.assertRaisesRegex(
+                RuntimeError, "result-space verification receipts are required"
+            ):
+                _resume_run(
+                    _resume_args(
+                        run_root,
+                        publication_receipt=receipt_path,
+                    )
+                )
+
             run_manifest_path = run_root / "manifest" / "run_manifest.json"
             run_manifest = read_json(run_manifest_path)
             run_manifest["intake_mode"] = "provider_api"
             write_json(run_manifest_path, run_manifest)
             provider_api_receipt = copy.deepcopy(valid)
-            provider_api_receipt.pop("source_move_receipt")
+            provider_api_receipt["source_move_receipt"] = None
             new_manifest_hash = sha256_file(run_manifest_path)
             for item in original_set["artifacts"]:
                 if Path(item["local_path"]) == run_manifest_path.resolve():
@@ -835,9 +983,55 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 if Path(item["local_path"]) == run_manifest_path.resolve():
                     item["sha256"] = new_manifest_hash
             write_json(publication_set_path, original_set)
+            provider_api_with_move = copy.deepcopy(provider_api_receipt)
+            provider_api_with_move["source_move_receipt"] = copy.deepcopy(
+                valid["source_move_receipt"]
+            )
+            write_json(receipt_path, provider_api_with_move)
+            with self.assertRaisesRegex(
+                RuntimeError, "provider API intake cannot include a source move"
+            ):
+                _resume_run(
+                    _resume_args(
+                        run_root,
+                        publication_receipt=receipt_path,
+                    )
+                )
+
             write_json(receipt_path, provider_api_receipt)
+            verification_receipts = _publication_verification_receipts(
+                run_root, root / "provider-api"
+            )
+            with self.assertRaisesRegex(
+                RuntimeError, "duplicate result-space verification receipt"
+            ):
+                _resume_run(
+                    _resume_args(
+                        run_root,
+                        publication_receipt=receipt_path,
+                        publication_verification_receipt=[
+                            verification_receipts[0],
+                            verification_receipts[0],
+                        ],
+                    )
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "MCP result-space re-downloads do not match publication",
+            ):
+                _resume_run(
+                    _resume_args(
+                        run_root,
+                        publication_receipt=receipt_path,
+                        publication_verification_receipt=verification_receipts[:-1],
+                    )
+                )
             resumed = _resume_run(
-                _resume_args(run_root, publication_receipt=receipt_path)
+                _resume_args(
+                    run_root,
+                    publication_receipt=receipt_path,
+                    publication_verification_receipt=verification_receipts,
+                )
             )
             self.assertEqual("passed", resumed["validation"])
 
@@ -852,10 +1046,44 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             self.assertEqual("awaiting_publication", result["status"])
             receipt_path = root / "manual-publication-receipt.json"
             write_json(receipt_path, _publication_receipt(run_root))
+            verification_receipts = _publication_verification_receipts(
+                run_root, root / "manual"
+            )
             resumed = _resume_run(
-                _resume_args(run_root, publication_receipt=receipt_path)
+                _resume_args(
+                    run_root,
+                    publication_receipt=receipt_path,
+                    publication_verification_receipt=verification_receipts,
+                )
             )
             self.assertEqual("passed", resumed["validation"])
+
+    def test_fleet_run_requires_sharepoint_capability_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "invoice.csv"
+            source.write_text("invoice", encoding="utf-8")
+            result_root = root / "results"
+            (result_root / "AAPT").mkdir(parents=True)
+            args = _args(
+                source=source,
+                result_root=result_root,
+                run_mode="parser_validation",
+                local_only=False,
+            )
+            args.sharepoint_mcp_capabilities = None
+            with (
+                patch.object(
+                    run_recon,
+                    "capability_manifest",
+                    return_value=_all_capabilities(),
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "sharepoint_mcp_capability_required",
+                ),
+            ):
+                run_recon.run(args)
 
     def test_cli_output_and_console_paths(self) -> None:
         result = {"validation": "passed"}

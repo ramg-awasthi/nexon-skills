@@ -1,4 +1,4 @@
-from recon_core.sharepoint_target import main
+from recon_core.intake_download_crypto import main
 
 
 if __name__ == "__main__":

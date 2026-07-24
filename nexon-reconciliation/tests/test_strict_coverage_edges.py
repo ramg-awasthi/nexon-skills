@@ -26,7 +26,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from recon_core import apply_exception_investigation, billing_query, common, intake_run  # noqa: E402
 from recon_core import notify_failure, optional_db_update, preflight_check, provider_api_download  # noqa: E402
-from recon_core import record_failure, safe_unpack, sharepoint_connector, validate_run  # noqa: E402
+from recon_core import record_failure, safe_unpack, validate_run  # noqa: E402
 from recon_core.common import APPROVED_REFINED_COLUMNS, EXCLUDED_PHASE1_COLUMNS, RUN_SUBDIRS, write_json  # noqa: E402
 from recon_core.write_reports import BASE_COLUMNS, _write_workbook  # noqa: E402
 
@@ -678,50 +678,6 @@ class StrictCoverageEdgeTests(unittest.TestCase):
             finally:
                 safe_unpack.zipfile.ZipFile = original_zipfile
             self.assertIn("Archive read failed", blocked[0]["reason"])
-
-    def test_sharepoint_graph_and_local_edge_paths_without_network(self) -> None:
-        old_env = os.environ.copy()
-        original_urlopen = sharepoint_connector.urlopen
-        original_graph_json = sharepoint_connector._graph_json
-        original_get_item = sharepoint_connector._get_item
-        original_sharepoint_roots = sharepoint_connector.sharepoint_roots
-        original_binding = sharepoint_connector._BINDING
-        sharepoint_connector._BINDING = {"site_id": "site", "drive_id": "drive"}
-        sharepoint_connector._AUTHORIZED_ITEM_IDS = {"item"}
-        try:
-            def raise_graph_error(*_args: object, **_kwargs: object) -> object:
-                raise HTTPError("https://graph.test", 403, "no", {}, io.BytesIO(b"denied"))
-
-            sharepoint_connector.urlopen = raise_graph_error
-            with self.assertRaisesRegex(RuntimeError, "SharePoint Graph request failed"):
-                sharepoint_connector._graph_request("GET", "/drives/drive/items/item")
-
-            class FakeResponse:
-                def __enter__(self) -> "FakeResponse":
-                    return self
-
-                def __exit__(self, *_args: object) -> None:
-                    return None
-
-                def read(self) -> bytes:
-                    return b"{}"
-
-            sharepoint_connector.urlopen = lambda *_args, **_kwargs: FakeResponse()
-            with self.assertRaisesRegex(RuntimeError, "sharepoint_read_only_violation"):
-                sharepoint_connector._graph_request("PUT", "/upload", b"payload", "application/octet-stream")
-
-            sharepoint_connector._graph_json = lambda method, path, body=None: {"value": [{"name": "a.csv", "file": {}, "id": "1", "size": 1}]}
-            self.assertEqual({"value": [{"name": "a.csv", "file": {}, "id": "1", "size": 1}]}, sharepoint_connector._get_item("/x"))
-
-        finally:
-            sharepoint_connector.urlopen = original_urlopen
-            sharepoint_connector._graph_json = original_graph_json
-            sharepoint_connector._get_item = original_get_item
-            sharepoint_connector.sharepoint_roots = original_sharepoint_roots
-            sharepoint_connector._BINDING = original_binding
-            sharepoint_connector._AUTHORIZED_ITEM_IDS = set()
-            os.environ.clear()
-            os.environ.update(old_env)
 
     def test_validate_run_remaining_failure_edges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

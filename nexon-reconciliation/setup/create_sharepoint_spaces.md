@@ -1,112 +1,97 @@
 # One-Time Setup Checklist
 
-This setup is performed once per environment. It is not part of a normal reconciliation run.
-
 ## SharePoint Spaces
 
-Create these folders only in:
-
-```text
-Site: Nexon Reconciliation Automation
-Site path: /sites/NexonReconciliationAutomation
-Library: the site's default document library
-```
-
-Do not create or use these runtime folders in the personal OneDrive `Recon`
-folder, the `Account Recon` site, or any other searched/discovered SharePoint
-location.
-
-Create upload folders:
+On the dedicated `Nexon Reconciliation Automation` site, create:
 
 ```text
 /recon-upload-space/
-  AAPT/
-  Telstra/
-  Optus/
-  Vocus/
-  Megaport/
-  Equinix/
-```
-
-Create non-production reference folders:
-
-```text
 /recon-reference-space/
-  AAPT/
-  Telstra/
-  Optus/
-  Vocus/
-  Megaport/
-  Equinix/
+/recon-result-space/
 ```
 
-Create result roots:
+Create provider folders under each root:
 
 ```text
-/recon-result-space/
-  AAPT/
-  Telstra/
-  Optus/
-  Vocus/
-  Megaport/
-  Equinix/
+AAPT
+Telstra
+Optus
+Vocus
+Megaport
+Equinix
 ```
+
+Do not reuse a personal OneDrive folder, the historical `Recon` tree, or
+another business site.
 
 ## Permissions
 
-- The native SharePoint connection can list the site and folders, copy/move
-  uploaded packages, create run folders, and upload artifacts.
-- The Fleet SharePoint access-profile application can read the exact site and
-  download binary source content through Graph.
-- The Fleet access-profile application requires `Sites.Selected` with
-  site-level `read`; the profile-backed connector is code-restricted to binary
-  download and verification.
-- The native SharePoint connection separately requires write access for runtime
-  moves and uploads.
+SharePoint Intake MCP:
 
-## Secrets And Profiles
+- read-only access to the exact site;
+- permission to list approved roots and read binary content;
+- no create, update, move, delete, share, or permission-management capability.
 
-- Connect and authorize the native LangSmith SharePoint tool account.
-- Configure the Fleet SharePoint access profile for the same tenant and grant the
-  application `Sites.Selected` plus site-level `read`.
-- Confirm the native SharePoint tool can list, upload, and move files in the fixed
-  upload/result spaces, and confirm the deterministic file-index connector can
-  download a test ZIP/PDF/XLSX without changing its checksum.
-- Store provider API and DB credentials in the profile secret store or environment secret manager.
-- Do not store secrets in `config/recon_settings.yaml`, prompts, reports, manifests, or logs.
+Native SharePoint connection:
 
-## Setup Validation
+- list the configured site and folders;
+- move exact operational sources into result run folders;
+- upload result artifacts;
+- no routine permission changes, sharing, or unrelated deletion.
 
-Run:
+## MCP Runtime
+
+Bind one environment-appropriate SharePoint Intake MCP connection exposing
+exactly:
 
 ```text
-python skills/nexon-reconciliation/scripts/resolve_sharepoint_target.py --sites-file <native_list_sites.json> --auth-mode auth_proxy --output <sharepoint_target_binding.json>
-python skills/nexon-reconciliation/scripts/preflight_check.py --config skills/nexon-reconciliation/config/recon_settings.yaml --sharepoint-auth-mode auth_proxy --sharepoint-binding <sharepoint_target_binding.json>
+recon_sp_get_capabilities
+recon_sp_probe
+recon_sp_index_sources
+recon_sp_prepare_download
+recon_sp_prepare_reference_test
 ```
 
-Expected result:
+Configure the exact gateway hostname in
+`sharepoint_intake.environment` and `sharepoint_intake.gateway_host`. The
+service download endpoint is HTTPS `/download`. A decrypted one-time ticket is
+accepted only in
+`X-Recon-Download-Ticket`.
 
-- No root folder creation occurs during normal runs.
-- `db_update_enabled=false`.
-- All six providers are configured.
+Keep the SharePoint application credential and attestation-signing material in the
+MCP service environment. Do not configure a Graph access profile in Fleet.
 
-Separately confirm through the native SharePoint tool that all upload,
-reference, and result provider roots exist.
+## Validation
 
-For local or mounted-folder testing only, run:
+1. Call `recon_sp_get_capabilities`; save the unchanged
+   `{schema_version: "1.0", kind: "capabilities", result: ...}` envelope.
+2. Call `recon_sp_probe`; save the unchanged
+   `{schema_version: "1.0", kind: "probe", result: ...}` envelope.
+3. Run:
 
 ```text
-python skills/nexon-reconciliation/scripts/preflight_check.py --config skills/nexon-reconciliation/config/recon_settings.yaml --local-check
+python skills/nexon-reconciliation/scripts/preflight_check.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
+  --sharepoint-mcp-capabilities <capabilities.json> \
+  --sharepoint-mcp-probe <probe.json> \
+  --output <runtime_capabilities.json>
 ```
 
-Expected result:
+4. Put one harmless fixture in each provider reference folder.
+5. Use `recon_sp_prepare_reference_test` and
+   `fetch_intake_artifact.py` to prove ZIP/PDF/XLSX binary integrity without
+   moving or modifying the fixture.
+6. Confirm the transient preparation file is deleted before redemption.
+7. Upload and move harmless setup artifacts with native SharePoint.
+8. Re-index and re-download the result artifacts through MCP to prove the
+   publication verification path.
 
-- All provider upload folders exist under the fixed `/recon-upload-space` test root.
-- All provider result roots exist under the fixed `/recon-result-space` test root.
+For local-only folder validation:
 
-For real SharePoint, folder existence and writability must be checked through the native LangSmith SharePoint tool during environment setup. The local validator does not silently create or mutate SharePoint folders.
+```text
+python skills/nexon-reconciliation/scripts/preflight_check.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
+  --local-check
+```
 
-Treat `/recon-reference-space` as immutable test-fixture storage. A reference
-validation may download from it but must never move, rename, or delete its source.
-
-If validation fails, fix setup before running reconciliation.
+Local validation does not create or mutate SharePoint folders.
