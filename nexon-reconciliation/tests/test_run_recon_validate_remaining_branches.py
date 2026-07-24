@@ -27,6 +27,8 @@ from test_orchestrator_validator_lifecycle import (  # noqa: E402
     RuntimeHarness,
     _all_capabilities,
     _args,
+    _download_receipt,
+    _sharepoint_binding,
 )
 
 
@@ -70,6 +72,11 @@ def _new_run(
     )
     with (
         patch.object(run_recon, "capability_manifest", return_value=_all_capabilities()),
+        patch.object(
+            run_recon,
+            "_verify_download_receipt",
+            return_value={"source_item_id": "source-item"},
+        ),
         patch.object(run_recon, "_run_command", side_effect=harness.command),
         persistence_patch,
         patch.dict(
@@ -98,6 +105,11 @@ def _resume_args(
         publication_receipt=publication_receipt,
         local_only=local_only,
     )
+
+
+def _resume_run(args: Namespace) -> dict:
+    with patch.object(run_recon, "_verify_published_item"):
+        return run_recon.resume_run(args)
 
 
 def _publication_receipt(run_root: Path) -> dict:
@@ -297,7 +309,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "reconciliation must move"):
             run_recon.run(recon_args)
 
-        unavailable_api_args = _args(run_mode="parser_validation")
+        unavailable_api_args = _args(run_mode="reconciliation")
         unavailable_api_args.intake_mode = "provider_api"
         with self.assertRaisesRegex(RuntimeError, "provider_api_not_available"):
             run_recon.run(unavailable_api_args)
@@ -306,36 +318,16 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "invoice.pdf"
             source.write_bytes(b"invoice")
-            manifest = root / "provider-api.json"
-            write_json(
-                manifest,
-                {
-                    "provider": "Equinix",
-                    "account_id": "ACC-1",
-                    "document_id": "DOC-1",
-                    "invoice_id": "INV-1",
-                    "output_file": str(source.resolve()),
-                    "output_sha256": sha256_file(source),
-                },
-            )
             args = _args(
                 source=source,
                 result_root=root / "results",
                 run_mode="parser_validation",
             )
-            args.provider = "Equinix"
-            args.intake_mode = "provider_api"
-            args.provider_api_manifest = manifest
-            args.provider_api_account_id = "ACC-1"
-            args.provider_api_document_id = "DOC-1"
-            args.source_identity = "INV-1"
             config = {
                 "features": {
                     "db_update_enabled": False,
-                    "provider_api_enabled": True,
                 },
                 "billing": {"audit_required": True},
-                "provider_api_adapters": {"equinix": True},
             }
             with (
                 patch.object(run_recon, "load_config", return_value=config),
@@ -354,6 +346,27 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "run_input_missing"),
         ):
             run_recon.run(missing_args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "invoice.csv"
+            source.write_text("invoice", encoding="utf-8")
+            args = _args(
+                source=source,
+                result_root=root / "results",
+                run_mode="parser_validation",
+                local_only=False,
+            )
+            args.sharepoint_binding = None
+            with (
+                patch.object(
+                    run_recon,
+                    "capability_manifest",
+                    return_value=_all_capabilities(),
+                ),
+                self.assertRaisesRegex(RuntimeError, "sharepoint_binding_required"),
+            ):
+                run_recon.run(args)
 
     def test_ambiguous_staged_source_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -482,7 +495,14 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "sqlite_shadow_not_allowed"),
             ):
                 args.local_only = False
-                run_recon.run(args)
+                args.sharepoint_binding = _sharepoint_binding(root)
+                args.source_download_receipt = _download_receipt(root)
+                with patch.object(
+                    run_recon,
+                    "_verify_download_receipt",
+                    return_value={"source_item_id": "source-item"},
+                ):
+                    run_recon.run(args)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -572,7 +592,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             )
             self.assertEqual("awaiting_exception_investigation", result["status"])
             with self.assertRaisesRegex(RuntimeError, "--investigation is required"):
-                run_recon.resume_run(_resume_args(run_root))
+                _resume_run(_resume_args(run_root))
 
             investigation = root / "investigation.json"
             write_json(
@@ -589,7 +609,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                     ],
                 },
             )
-            resumed = run_recon.resume_run(
+            resumed = _resume_run(
                 _resume_args(
                     run_root,
                     investigation=investigation,
@@ -609,12 +629,12 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             state["run_status"] = "running"
             write_json(state_path, state)
             with self.assertRaisesRegex(RuntimeError, "not awaiting investigation or publication"):
-                run_recon.resume_run(_resume_args(run_root))
+                _resume_run(_resume_args(run_root))
 
             state["run_status"] = "completed"
             write_json(state_path, state)
             with self.assertRaisesRegex(RuntimeError, "must be in running state"):
-                run_recon.resume_run(_resume_args(run_root))
+                _resume_run(_resume_args(run_root))
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -662,7 +682,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             valid = _publication_receipt(run_root)
 
             with self.assertRaisesRegex(RuntimeError, "--publication-receipt is required"):
-                run_recon.resume_run(_resume_args(run_root))
+                _resume_run(_resume_args(run_root))
 
             cases = [
                 (
@@ -686,7 +706,19 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                     "paths/checksums",
                 ),
                 (
+                    lambda payload: payload["uploaded_artifacts"].append(
+                        copy.deepcopy(payload["uploaded_artifacts"][0])
+                    ),
+                    "paths/checksums",
+                ),
+                (
                     lambda payload: payload.update({"source_move_receipt": {}}),
+                    "source move receipt",
+                ),
+                (
+                    lambda payload: payload["source_move_receipt"].update(
+                        {"item_id": "different-source-item"}
+                    ),
                     "source move receipt",
                 ),
             ]
@@ -695,7 +727,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 mutation(payload)
                 write_json(receipt_path, payload)
                 with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message):
-                    run_recon.resume_run(
+                    _resume_run(
                         _resume_args(run_root, publication_receipt=receipt_path)
                     )
 
@@ -716,7 +748,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 write_json(publication_set_path, payload)
                 write_json(receipt_path, valid)
                 with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message):
-                    run_recon.resume_run(
+                    _resume_run(
                         _resume_args(run_root, publication_receipt=receipt_path)
                     )
             write_json(publication_set_path, original_set)
@@ -727,7 +759,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 artifact_path.write_bytes(original_artifact + b"tampered")
                 write_json(receipt_path, valid)
                 with self.assertRaisesRegex(RuntimeError, "frozen artifact changed"):
-                    run_recon.resume_run(
+                    _resume_run(
                         _resume_args(run_root, publication_receipt=receipt_path)
                     )
             finally:
@@ -748,7 +780,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                     item["sha256"] = new_manifest_hash
             write_json(publication_set_path, original_set)
             write_json(receipt_path, provider_api_receipt)
-            resumed = run_recon.resume_run(
+            resumed = _resume_run(
                 _resume_args(run_root, publication_receipt=receipt_path)
             )
             self.assertEqual("passed", resumed["validation"])
@@ -764,7 +796,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             self.assertEqual("awaiting_publication", result["status"])
             receipt_path = root / "manual-publication-receipt.json"
             write_json(receipt_path, _publication_receipt(run_root))
-            resumed = run_recon.run(
+            resumed = _resume_run(
                 _resume_args(run_root, publication_receipt=receipt_path)
             )
             self.assertEqual("passed", resumed["validation"])
@@ -1493,6 +1525,8 @@ class ValidateRunRemainingBranchTests(unittest.TestCase):
                     "argv",
                     [
                         "validate_run.py",
+                        "--config",
+                        str(CONFIG),
                         "--run-root",
                         str(run_root),
                         "--run-mode",
@@ -1511,6 +1545,8 @@ class ValidateRunRemainingBranchTests(unittest.TestCase):
                     "argv",
                     [
                         "validate_run.py",
+                        "--config",
+                        str(CONFIG),
                         "--run-root",
                         str(run_root),
                         "--run-mode",

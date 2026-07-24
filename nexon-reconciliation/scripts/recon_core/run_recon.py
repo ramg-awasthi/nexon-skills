@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -26,6 +27,8 @@ from .match_recon import classify_line
 from .preflight_check import capability_manifest
 from .run_state import create_state, finalize_state, update_stage
 from .safe_unpack import extract_zip
+from .sharepoint_binding import load_binding
+from . import sharepoint_connector
 from .sqlserver_persistence import persist_sqlserver_run
 from .validate_run import validate_run
 from .write_reports import write_reports
@@ -141,6 +144,128 @@ def _logical_run_path(provider: str, run_root: Path) -> str:
     return logical_sharepoint_run_path(provider, run_root)
 
 
+def _freeze_sharepoint_binding(
+    run_root: Path, binding_path: Path
+) -> dict[str, Any]:
+    binding = load_binding(binding_path)
+    frozen_path = run_root / "manifest" / "sharepoint_target_binding.json"
+    write_json(frozen_path, binding)
+    return binding
+
+
+def _verify_download_receipt(
+    *,
+    receipt_path: Path,
+    binding_path: Path,
+    source_file: Path,
+    provider: str,
+    auth_mode: str,
+) -> dict[str, Any]:
+    binding = load_binding(binding_path)
+    receipt = read_json(receipt_path)
+    source_name = source_file.name
+    expected = {
+        "status": "downloaded",
+        "provider": provider,
+        "source_name": source_name,
+        "destination": str(source_file.resolve()),
+        "site_id": binding["site_id"],
+        "drive_id": binding["drive_id"],
+        "binding_sha256": sha256_file(binding_path),
+        "byte_count": source_file.stat().st_size,
+        "downloaded_sha256": sha256_file(source_file),
+    }
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        raise RuntimeError(
+            "source_download_receipt_invalid: staged source provenance does not match."
+        )
+    item_id = str(receipt.get("source_item_id") or "").strip()
+    if not item_id:
+        raise RuntimeError(
+            "source_download_receipt_invalid: source_item_id is required."
+        )
+
+    sharepoint_connector.configure_runtime(
+        auth_mode=auth_mode, binding_path=binding_path
+    )
+    metadata = sharepoint_connector._get_item(
+        f"/recon-upload-space/{provider}/{source_name}"
+    )
+    expected_source_path = (
+        unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
+        + f"/recon-upload-space/{provider}/{source_name}"
+    )
+    metadata_url = str(metadata.get("webUrl") or "")
+    metadata_path = unquote(urlparse(metadata_url).path)
+    if (
+        str(metadata.get("id") or "") != item_id
+        or str(metadata.get("parentReference", {}).get("driveId") or "")
+        != binding["drive_id"]
+        or metadata_url != str(receipt.get("source_web_url") or "")
+        or metadata_path.casefold() != expected_source_path.casefold()
+    ):
+        raise RuntimeError(
+            "source_download_receipt_invalid: source item identity/path does not match."
+        )
+    live_bytes = sharepoint_connector._graph_request(
+        "GET", f"/drives/{binding['drive_id']}/items/{item_id}/content"
+    )
+    if sha256_file(source_file) != hashlib.sha256(live_bytes).hexdigest():
+        raise RuntimeError(
+            "source_download_receipt_invalid: staged bytes do not match the bound SharePoint item."
+        )
+    return receipt
+
+
+def _verify_published_item(
+    *,
+    item: dict[str, Any],
+    expected_url: str,
+    expected_sha256: str,
+    binding: dict[str, Any],
+) -> None:
+    item_id = str(item.get("item_id") or "").strip()
+    drive_path = unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
+    item_path = unquote(urlparse(expected_url).path)
+    if not item_path.casefold().startswith((drive_path + "/").casefold()):
+        raise RuntimeError(
+            "publication_invalid: item URL is outside the bound document library."
+        )
+    metadata = sharepoint_connector._get_item(item_path[len(drive_path) :])
+    if (
+        str(metadata.get("id") or "") != item_id
+        or str(metadata.get("parentReference", {}).get("driveId") or "")
+        != binding["drive_id"]
+        or str(metadata.get("webUrl") or "") != expected_url
+    ):
+        raise RuntimeError(
+            "publication_invalid: live SharePoint item identity/path does not match."
+        )
+    content = sharepoint_connector._graph_request(
+        "GET", f"/drives/{binding['drive_id']}/items/{item_id}/content"
+    )
+    if hashlib.sha256(content).hexdigest() != expected_sha256:
+        raise RuntimeError(
+            "publication_invalid: live SharePoint content checksum does not match."
+        )
+
+
+def _publication_target(run_root: Path) -> tuple[str, str]:
+    binding_path = run_root / "manifest" / "sharepoint_target_binding.json"
+    if not binding_path.is_file():
+        raise RuntimeError(
+            "sharepoint_binding_missing: the run has no frozen SharePoint target."
+        )
+    binding = load_binding(binding_path)
+    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+    if run_manifest.get("sharepoint_binding_sha256") != sha256_file(binding_path):
+        raise RuntimeError(
+            "sharepoint_binding_changed: the frozen SharePoint target no longer matches the run manifest."
+        )
+    drive_path = unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
+    return str(binding["hostname"]), drive_path
+
+
 def _unresolved_payload(
     rows: list[dict[str, Any]],
     candidates: dict[str, Any],
@@ -230,10 +355,18 @@ def _publishable_artifacts(run_root: Path) -> list[Path]:
         run_root / "manifest" / "notification_receipt.json",
         run_root / "manifest" / "failure_manifest.json",
     }
+    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+    manual_source = (
+        run_root / "source"
+        if run_manifest.get("intake_mode") == "manual_upload"
+        else None
+    )
     return sorted(
         path
         for path in run_root.rglob("*")
-        if path.is_file() and path not in mutable
+        if path.is_file()
+        and path not in mutable
+        and (manual_source is None or manual_source not in path.parents)
     )
 
 
@@ -339,20 +472,33 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
         year = run_root.parent.parent.name
         month = run_root.parent.name
         run_prefix = f"/recon-result-space/{provider}/{year}/{month}/{run_root.name}/"
+        expected_hostname, drive_path = _publication_target(run_root)
+        frozen_binding_path = (
+            run_root / "manifest" / "sharepoint_target_binding.json"
+        )
+        binding = load_binding(frozen_binding_path)
+        live_checks: list[tuple[dict[str, Any], str, str]] = []
         for item in uploaded:
             relative = Path(str(item.get("local_path", ""))).resolve().relative_to(run_root).as_posix()
             parsed_url = urlparse(str(item.get("sharepoint_url", "")))
             decoded_path = unquote(parsed_url.path)
-            expected_suffix = run_prefix + relative
+            expected_suffix = drive_path + run_prefix + relative
             if (
                 parsed_url.scheme != "https"
-                or parsed_url.netloc.lower() != "nexonap.sharepoint.com"
-                or not decoded_path.endswith(expected_suffix)
+                or parsed_url.netloc.lower() != expected_hostname
+                or decoded_path.casefold() != expected_suffix.casefold()
                 or not str(item.get("item_id", "")).strip()
             ):
                 raise RuntimeError(
                     "publication_invalid: artifact URL/item ID does not prove the exact run-relative destination."
                 )
+            live_checks.append(
+                (
+                    item,
+                    str(item.get("sharepoint_url") or ""),
+                    str(item.get("sha256") or ""),
+                )
+            )
         expected = {
             str(item["local_path"]): str(item["sha256"])
             for item in frozen_artifacts
@@ -367,7 +513,7 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
             str(item.get("local_path", "")): str(item.get("sha256", ""))
             for item in uploaded
         }
-        if received != expected:
+        if len(uploaded) != len(received) or received != expected:
             raise RuntimeError("publication_invalid: receipt paths/checksums do not match the run artifacts.")
         run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
         if run_manifest.get("intake_mode") == "manual_upload":
@@ -376,16 +522,36 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
             parsed_source_url = urlparse(source_url)
             decoded_source_path = unquote(parsed_source_url.path)
             source_name = Path(str(run_manifest.get("source_file") or "")).name
-            expected_source_suffix = run_prefix + f"source/{source_name}"
+            expected_source_suffix = drive_path + run_prefix + f"source/{source_name}"
             if (
                 source_move.get("status") != "moved"
                 or not str(source_move.get("item_id", "")).strip()
+                or source_move.get("item_id")
+                != run_manifest.get("sharepoint_source_item_id")
                 or source_move.get("sha256") != run_manifest.get("source_checksum_sha256")
                 or parsed_source_url.scheme != "https"
-                or parsed_source_url.netloc.lower() != "nexonap.sharepoint.com"
-                or not decoded_source_path.endswith(expected_source_suffix)
+                or parsed_source_url.netloc.lower() != expected_hostname
+                or decoded_source_path.casefold() != expected_source_suffix.casefold()
             ):
                 raise RuntimeError("publication_invalid: manual upload requires a run-scoped source move receipt.")
+            live_checks.append(
+                (
+                    source_move,
+                    source_url,
+                    str(run_manifest.get("source_checksum_sha256") or ""),
+                )
+            )
+        sharepoint_connector.configure_runtime(
+            auth_mode=getattr(args, "sharepoint_auth_mode", "auth_proxy"),
+            binding_path=frozen_binding_path,
+        )
+        for item, expected_url, expected_sha256 in live_checks:
+            _verify_published_item(
+                item=item,
+                expected_url=expected_url,
+                expected_sha256=expected_sha256,
+                binding=binding,
+            )
         receipt_path = run_root / "manifest" / "publication_receipt.json"
         write_json(receipt_path, receipt)
         update_stage(
@@ -408,6 +574,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     require_audit(config)
     if args.run_mode == "parser_validation" and not args.copy:
         raise RuntimeError("invalid_run_mode_option: parser_validation requires --copy.")
+    if args.run_mode == "parser_validation" and args.intake_mode != "manual_upload":
+        raise RuntimeError(
+            "invalid_run_mode_option: parser_validation supports manual_upload intake only."
+        )
     if args.run_mode == "reconciliation" and args.copy:
         raise RuntimeError("invalid_run_mode_option: reconciliation must move the staged local source.")
     if args.intake_mode == "provider_api":
@@ -437,6 +607,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(
             "run_input_missing: --provider, --source-file, --result-root, and --run-mode are required for a new run."
         )
+    binding_argument = getattr(args, "sharepoint_binding", None)
+    if not args.local_only and binding_argument is None:
+        raise RuntimeError(
+            "sharepoint_binding_required: Fleet publication requires a validated target binding."
+        )
+    verified_download_receipt: dict[str, Any] | None = None
+    if not args.local_only and args.intake_mode == "manual_upload":
+        receipt_argument = getattr(args, "source_download_receipt", None)
+        if receipt_argument is None:
+            raise RuntimeError(
+                "source_download_receipt_required: Fleet intake requires a verified binary download receipt."
+            )
+        verified_download_receipt = _verify_download_receipt(
+            receipt_path=receipt_argument.resolve(),
+            binding_path=binding_argument.resolve(),
+            source_file=args.source_file.resolve(),
+            provider=args.provider,
+            auth_mode=getattr(args, "sharepoint_auth_mode", "auth_proxy"),
+        )
+    (args.result_root / args.provider).mkdir(parents=True, exist_ok=True)
     source_checksum = sha256_file(args.source_file)
     run_root = create_run(
         config=config,
@@ -451,6 +641,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     run_manifest_path = run_root / "manifest" / "run_manifest.json"
     run_manifest = read_json(run_manifest_path)
     run_manifest["billing_period"] = args.billing_period or ""
+    if verified_download_receipt is not None:
+        run_manifest["sharepoint_source_item_id"] = verified_download_receipt[
+            "source_item_id"
+        ]
+    if binding_argument is not None:
+        binding = _freeze_sharepoint_binding(run_root, binding_argument.resolve())
+        frozen_binding_path = run_root / "manifest" / "sharepoint_target_binding.json"
+        run_manifest["sharepoint_site_id"] = binding["site_id"]
+        run_manifest["sharepoint_drive_id"] = binding["drive_id"]
+        run_manifest["sharepoint_binding_sha256"] = sha256_file(frozen_binding_path)
     write_json(run_manifest_path, run_manifest)
     state_path = run_root / "manifest" / "run_state.json"
     create_state(
@@ -775,6 +975,13 @@ def main() -> int:
     parser.add_argument("--provider-account-id", type=int)
     parser.add_argument("--investigation", type=Path)
     parser.add_argument("--publication-receipt", type=Path)
+    parser.add_argument("--sharepoint-binding", type=Path)
+    parser.add_argument("--source-download-receipt", type=Path)
+    parser.add_argument(
+        "--sharepoint-auth-mode",
+        choices=["auth_proxy"],
+        default="auth_proxy",
+    )
     parser.add_argument("--local-only", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

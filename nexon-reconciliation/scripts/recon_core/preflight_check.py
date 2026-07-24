@@ -14,9 +14,18 @@ from .common import (
     sharepoint_roots,
     write_json,
 )
+from .sharepoint_binding import load_binding
+from . import sharepoint_connector
 
 
-def capability_manifest(config: dict, *, local_check: bool) -> dict:
+def capability_manifest(
+    config: dict,
+    *,
+    local_check: bool,
+    sharepoint_auth_mode: str = "auth_proxy",
+    sharepoint_binding: Path | None = None,
+    profile_validated: bool = False,
+) -> dict:
     features = config.get("features", {})
     billing_enabled = features.get("billing_query_enabled") is True
     core_enabled = features.get("core_persistence_enabled") is True
@@ -31,23 +40,21 @@ def capability_manifest(config: dict, *, local_check: bool) -> dict:
             or (local_check and core_mode == "sqlite_shadow")
         )
     )
-    graph_credentials = all(
-        os.environ.get(name)
-        for name in (
-            "NEXON_RECON_SHAREPOINT_TENANT_ID",
-            "NEXON_RECON_SHAREPOINT_CLIENT_ID",
-            "NEXON_RECON_SHAREPOINT_CLIENT_SECRET",
-            "NEXON_RECON_SHAREPOINT_DRIVE_ID",
-        )
-    )
-    connector_binary_ready = (
-        os.environ.get("NEXON_RECON_BINARY_STAGING_READY", "").strip().lower() == "true"
+    binding_ready = False
+    if sharepoint_binding is not None:
+        load_binding(sharepoint_binding)
+        binding_ready = True
+    profile_ready = (
+        sharepoint_auth_mode == "auth_proxy"
+        and binding_ready
+        and profile_validated
     )
     return {
         "contract_version": 1,
         "capabilities": {
-            "manual_source_discovery": True,
-            "binary_source_staging": bool(local_check or graph_credentials or connector_binary_ready),
+            "binary_source_staging": bool(
+                local_check or profile_ready
+            ),
             "provider_parsing": True,
             "archive_validation": True,
             "core_supplier_persistence": core_ready,
@@ -74,6 +81,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate one-time Nexon recon folder setup.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--local-check", action="store_true", help="Treat fixed roots as local filesystem paths.")
+    parser.add_argument(
+        "--sharepoint-auth-mode",
+        choices=["auth_proxy"],
+        default="auth_proxy",
+    )
+    parser.add_argument("--sharepoint-binding", type=Path)
     parser.add_argument("--output", type=Path, help="Write a machine-readable capability manifest.")
     args = parser.parse_args()
 
@@ -92,7 +105,38 @@ def main() -> int:
     if disabled_adapters:
         raise RuntimeError(f"Remove disabled provider API adapter entries instead of setting false: {sorted(disabled_adapters)}")
 
-    capabilities = capability_manifest(config, local_check=args.local_check)
+    profile_validated = False
+    if not args.local_check and args.sharepoint_binding is not None:
+        binding = load_binding(args.sharepoint_binding)
+        sharepoint_connector.configure_runtime(
+            auth_mode=args.sharepoint_auth_mode,
+            binding_path=args.sharepoint_binding,
+        )
+        site = sharepoint_connector._graph_json(
+            "GET", f"/sites/{binding['site_id']}"
+        )
+        drive = sharepoint_connector._graph_json(
+            "GET", f"/drives/{binding['drive_id']}"
+        )
+        profile_validated = (
+            site.get("id") == binding["site_id"]
+            and str(site.get("webUrl") or "").rstrip("/") == binding["site_url"]
+            and drive.get("id") == binding["drive_id"]
+            and str(drive.get("webUrl") or "").rstrip("/")
+            == binding["drive_web_url"]
+        )
+        if not profile_validated:
+            raise RuntimeError(
+                "profile_site_mismatch: active profile does not match the resolved SharePoint target."
+            )
+
+    capabilities = capability_manifest(
+        config,
+        local_check=args.local_check,
+        sharepoint_auth_mode=args.sharepoint_auth_mode,
+        sharepoint_binding=args.sharepoint_binding,
+        profile_validated=profile_validated,
+    )
     if args.output:
         write_json(args.output, capabilities)
 

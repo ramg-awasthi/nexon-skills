@@ -125,7 +125,10 @@ Failure manifests require `run_id` or correlation ID, provider, failed stage, fa
 
 ## Full-Run Gate
 
-Production reconciliation is permitted only when `preflight_check.py` emits a capability manifest with every required capability enabled. Documentation or script presence is not capability evidence.
+Production reconciliation is permitted only when `preflight_check.py` emits a
+capability manifest with every required script capability enabled and the
+native SharePoint connection separately passes its list, move, and upload
+permission checks. Documentation or script presence is not capability evidence.
 
 A parser-only test is not a reconciliation run. It proves deterministic extraction and source accounting only.
 

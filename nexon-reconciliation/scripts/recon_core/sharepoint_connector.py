@@ -1,86 +1,65 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote
 from urllib.request import Request, urlopen
 
-from .common import DEFAULT_CONFIG_PATH, ensure_provider, load_config, sharepoint_roots, write_json
+from .common import (
+    DEFAULT_CONFIG_PATH,
+    ensure_provider,
+    load_config,
+    sha256_file,
+    sharepoint_roots,
+    write_json,
+)
+from .sharepoint_binding import load_binding
 
 
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
+_AUTH_MODE = "auth_proxy"
+_BINDING: dict | None = None
+_BINDING_SHA256 = ""
+_RESOLUTION_SITE_ID = ""
+_AUTHORIZED_ITEM_IDS: set[str] = set()
 
 
-def _token() -> str:
-    token = os.environ.get("NEXON_RECON_GRAPH_ACCESS_TOKEN")
-    if token:
-        return token
-
-    tenant_id = os.environ.get("NEXON_RECON_SHAREPOINT_TENANT_ID")
-    client_id = os.environ.get("NEXON_RECON_SHAREPOINT_CLIENT_ID")
-    client_secret = os.environ.get("NEXON_RECON_SHAREPOINT_CLIENT_SECRET")
-    if not all((tenant_id, client_id, client_secret)):
-        raise RuntimeError(
-            "sharepoint_auth_missing: Configure NEXON_RECON_SHAREPOINT_TENANT_ID, "
-            "NEXON_RECON_SHAREPOINT_CLIENT_ID, and "
-            "NEXON_RECON_SHAREPOINT_CLIENT_SECRET for application authentication."
-        )
-
-    body = urlencode(
-        {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "scope": "https://graph.microsoft.com/.default",
-            "grant_type": "client_credentials",
-        }
-    ).encode("utf-8")
-    request = Request(
-        f"https://login.microsoftonline.com/{quote(tenant_id, safe='')}/oauth2/v2.0/token",
-        data=body,
-        headers={"content-type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=60) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            "sharepoint_auth_failed: client-credential token request returned "
-            f"HTTP {exc.code}: {detail[:500]}"
-        ) from exc
-    access_token = payload.get("access_token")
-    if not access_token:
-        raise RuntimeError(
-            "sharepoint_auth_failed: token response did not include access_token."
-        )
-    return str(access_token)
+def configure_runtime(*, auth_mode: str, binding_path: Path | None) -> None:
+    global _AUTH_MODE, _BINDING, _BINDING_SHA256, _RESOLUTION_SITE_ID
+    global _AUTHORIZED_ITEM_IDS
+    if auth_mode != "auth_proxy":
+        raise RuntimeError(f"sharepoint_auth_mode_invalid: {auth_mode}")
+    _AUTH_MODE = auth_mode
+    _BINDING = load_binding(binding_path) if binding_path is not None else None
+    _BINDING_SHA256 = sha256_file(binding_path) if binding_path is not None else ""
+    _RESOLUTION_SITE_ID = ""
+    _AUTHORIZED_ITEM_IDS = set()
 
 
 def _drive_id() -> str:
-    drive_id = os.environ.get("NEXON_RECON_SHAREPOINT_DRIVE_ID")
-    if not drive_id:
-        raise RuntimeError(
-            "sharepoint_drive_missing: This legacy fallback connector requires "
-            "NEXON_RECON_SHAREPOINT_DRIVE_ID in the environment. Fleet runtime should use the native SharePoint tool."
-        )
-    return drive_id
+    if _BINDING is not None:
+        return str(_BINDING["drive_id"])
+    raise RuntimeError(
+        "sharepoint_drive_missing: a validated SharePoint binding is required."
+    )
 
 
 def _graph_request(method: str, path: str, body: dict | bytes | None = None, content_type: str = "application/json") -> bytes:
-    headers = {"authorization": f"Bearer {_token()}"}
-    data: bytes | None = None
-    if isinstance(body, dict):
-        data = json.dumps(body).encode("utf-8")
-        headers["content-type"] = content_type
-    elif isinstance(body, bytes):
-        data = body
-        headers["content-type"] = content_type
-    request = Request(f"{GRAPH_ROOT}{path}", data=data, headers=headers, method=method)
+    if method != "GET" or body is not None:
+        raise RuntimeError(
+            "sharepoint_read_only_violation: the profile-backed connector permits GET without a request body only."
+        )
+    if not _graph_path_allowed(path):
+        raise RuntimeError(
+            "sharepoint_route_violation: Graph request is outside the resolved reconciliation site/drive."
+        )
+    request = Request(f"{GRAPH_ROOT}{path}", method="GET")
     try:
         with urlopen(request, timeout=180) as response:
             return response.read()
@@ -90,36 +69,88 @@ def _graph_request(method: str, path: str, body: dict | bytes | None = None, con
 
 
 def _graph_json(method: str, path: str, body: dict | None = None) -> dict:
+    global _RESOLUTION_SITE_ID, _AUTHORIZED_ITEM_IDS
+    if body is not None:
+        raise RuntimeError(
+            "sharepoint_read_only_violation: Graph JSON requests cannot include a body."
+        )
     payload = _graph_request(method, path, body)
-    return json.loads(payload.decode("utf-8")) if payload else {}
+    result = json.loads(payload.decode("utf-8")) if payload else {}
+    if _BINDING is None and re.fullmatch(
+        r"/sites/[A-Za-z0-9.-]+:/sites/NexonReconciliationAutomation", path
+    ):
+        _RESOLUTION_SITE_ID = str(result.get("id") or "")
+    elif _BINDING is not None and "/root:" in path:
+        item_id = str(result.get("id") or "").strip()
+        if item_id:
+            _AUTHORIZED_ITEM_IDS.add(item_id)
+    return result
+
+
+def _graph_path_allowed(path: str) -> bool:
+    if "?" in path or "#" in path:
+        return False
+    if _BINDING is None:
+        if re.fullmatch(
+            r"/sites/[A-Za-z0-9.-]+\.sharepoint\.com:/sites/NexonReconciliationAutomation",
+            path,
+        ):
+            return True
+        return bool(
+            _RESOLUTION_SITE_ID
+            and path == f"/sites/{quote(_RESOLUTION_SITE_ID, safe='')}/drive"
+        )
+
+    site_id = str(_BINDING["site_id"])
+    drive_id = str(_BINDING["drive_id"])
+    if path in {f"/sites/{site_id}", f"/drives/{drive_id}"}:
+        return True
+    root_prefix = f"/drives/{drive_id}/root:"
+    if path.startswith(root_prefix) and path.endswith(":"):
+        try:
+            drive_path = _safe_drive_path(path[len(root_prefix) : -1])
+        except RuntimeError:
+            return False
+        return drive_path.startswith(
+            ("/recon-upload-space/", "/recon-result-space/")
+        )
+    item_match = re.fullmatch(
+        rf"/drives/{re.escape(drive_id)}/items/([^/]+)(?:/content)?",
+        path,
+    )
+    return bool(
+        item_match and item_match.group(1) in _AUTHORIZED_ITEM_IDS
+    )
 
 
 def _drive_path(path: str) -> str:
-    normalized = "/" + path.strip("/")
+    normalized = _safe_drive_path(path)
     return f"/drives/{_drive_id()}/root:{quote(normalized, safe='/')}:"
+
+
+def _safe_drive_path(path: str) -> str:
+    decoded = unquote(path).replace("\\", "/")
+    parts = [part for part in decoded.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise RuntimeError("sharepoint_path_invalid: path is empty or contains traversal.")
+    return "/" + "/".join(parts)
+
+
+def _safe_basename(value: str) -> str:
+    decoded = value.strip()
+    if (
+        not decoded
+        or Path(decoded).name != decoded
+        or "/" in decoded
+        or "\\" in decoded
+        or decoded in {".", ".."}
+    ):
+        raise RuntimeError("sharepoint_source_name_invalid: source name must be a basename.")
+    return decoded
 
 
 def _get_item(path: str) -> dict:
     return _graph_json("GET", _drive_path(path))
-
-
-def _children(path: str) -> list[dict]:
-    return _graph_json("GET", f"{_drive_path(path)}/children").get("value", [])
-
-
-def _ensure_folder(path: str) -> dict:
-    parts = [part for part in path.strip("/").split("/") if part]
-    current = ""
-    item: dict = {}
-    for part in parts:
-        parent = current
-        current = f"{current}/{part}" if current else part
-        try:
-            item = _get_item(current)
-        except RuntimeError:
-            body = {"name": part, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"}
-            item = _graph_json("POST", f"{_drive_path(parent)}/children", body)
-    return item
 
 
 def _provider_paths(config: dict, provider: str) -> tuple[Path, Path]:
@@ -127,113 +158,51 @@ def _provider_paths(config: dict, provider: str) -> tuple[Path, Path]:
     return upload_root / provider, result_root / provider
 
 
-def check_spaces(args: argparse.Namespace, config: dict) -> int:
-    providers = [args.provider] if args.provider else sorted(config["providers"])
-    if args.mode == "local":
-        missing: list[str] = []
-        for provider in providers:
-            ensure_provider(config, provider)
-            for path in _provider_paths(config, provider):
-                if not path.is_dir():
-                    missing.append(str(path))
-        if missing:
-            write_json(args.output, {"status": "setup_incomplete", "missing": missing})
-            return 2
-        write_json(args.output, {"status": "ok", "providers": providers})
-        return 0
-
-    checked: list[str] = []
-    for provider in providers:
-        ensure_provider(config, provider)
-        for path_obj in _provider_paths(config, provider):
-            path = path_obj.as_posix()
-            _get_item(path)
-            checked.append(path)
-    write_json(args.output, {"status": "ok", "checked": checked})
-    return 0
-
-
-def find_upload(args: argparse.Namespace, config: dict) -> int:
-    ensure_provider(config, args.provider)
-    upload_path, _result_path = _provider_paths(config, args.provider)
-    if args.mode == "local":
-        files = [path for path in upload_path.iterdir() if path.is_file()]
-        if args.source_name:
-            files = [path for path in files if path.name == args.source_name]
-        write_json(args.output, {"matches": [str(path) for path in files], "count": len(files)})
-        return 0 if len(files) == 1 else 2
-
-    children = [item for item in _children(upload_path.as_posix()) if "file" in item]
-    if args.source_name:
-        children = [item for item in children if item.get("name") == args.source_name]
-    write_json(
-        args.output,
-        {"matches": [{"name": item.get("name"), "id": item.get("id"), "size": item.get("size")} for item in children], "count": len(children)},
-    )
-    return 0 if len(children) == 1 else 2
-
-
 def download_upload(args: argparse.Namespace, config: dict) -> int:
     ensure_provider(config, args.provider)
+    source_name = _safe_basename(args.source_name)
     upload_root, _result_path = _provider_paths(config, args.provider)
-    upload_path = upload_root / args.source_name
+    upload_path = upload_root / source_name
     destination = args.destination
     destination.parent.mkdir(parents=True, exist_ok=True)
     if args.mode == "local":
         shutil.copy2(upload_path, destination)
-        write_json(args.output, {"status": "downloaded", "destination": str(destination)})
+        write_json(
+            args.output,
+            {
+                "status": "downloaded",
+                "provider": args.provider,
+                "source_name": source_name,
+                "destination": str(destination.resolve()),
+                "byte_count": destination.stat().st_size,
+                "downloaded_sha256": sha256_file(destination),
+            },
+        )
         return 0
 
     item = _get_item(upload_path.as_posix())
+    if not args.source_item_id or item.get("id") != args.source_item_id:
+        raise RuntimeError(
+            "sharepoint_source_identity_changed: selected item ID no longer matches the upload path."
+        )
     data = _graph_request("GET", f"/drives/{_drive_id()}/items/{item['id']}/content")
     destination.write_bytes(data)
-    write_json(args.output, {"status": "downloaded", "source_item_id": item["id"], "destination": str(destination)})
-    return 0
-
-
-def move_upload_to_run_source(args: argparse.Namespace, config: dict) -> int:
-    ensure_provider(config, args.provider)
-    upload_root, _result_path = _provider_paths(config, args.provider)
-    upload_path = upload_root / args.source_name
-    if args.mode == "local":
-        target_dir = Path(args.run_root) / "source"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / upload_path.name
-        if args.copy:
-            shutil.copy2(upload_path, target)
-            action = "copied"
-        else:
-            shutil.move(str(upload_path), str(target))
-            action = "moved"
-        write_json(args.output, {"status": action, "target": str(target)})
-        return 0
-
-    run_source = f"{args.run_root.strip('/')}/source"
-    source_item = _get_item(upload_path.as_posix())
-    parent = _ensure_folder(run_source)
-    if args.copy:
-        body = {"parentReference": {"id": parent["id"]}, "name": args.source_name}
-        result = _graph_json("POST", f"/drives/{_drive_id()}/items/{source_item['id']}/copy", body)
-        status = "copy_started"
-    else:
-        body = {"parentReference": {"id": parent["id"]}, "name": args.source_name}
-        result = _graph_json("PATCH", f"/drives/{_drive_id()}/items/{source_item['id']}", body)
-        status = "moved"
-    write_json(args.output, {"status": status, "result": result})
-    return 0
-
-
-def upload_artifact(args: argparse.Namespace, config: dict) -> int:
-    if args.mode == "local":
-        destination = Path(args.sharepoint_path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(args.local_file, destination)
-        write_json(args.output, {"status": "uploaded", "target": str(destination)})
-        return 0
-
-    data = args.local_file.read_bytes()
-    _graph_request("PUT", f"{_drive_path(args.sharepoint_path)}/content", data, content_type="application/octet-stream")
-    write_json(args.output, {"status": "uploaded", "target": args.sharepoint_path})
+    write_json(
+        args.output,
+        {
+            "status": "downloaded",
+            "provider": args.provider,
+            "source_name": source_name,
+            "destination": str(destination.resolve()),
+            "source_item_id": item["id"],
+            "source_web_url": item.get("webUrl"),
+            "site_id": _BINDING["site_id"] if _BINDING else "",
+            "drive_id": _drive_id(),
+            "binding_sha256": _BINDING_SHA256,
+            "byte_count": len(data),
+            "downloaded_sha256": hashlib.sha256(data).hexdigest(),
+        },
+    )
     return 0
 
 
@@ -241,43 +210,30 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="SharePoint connector for Nexon reconciliation spaces.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--mode", choices=["graph", "local"], default=os.environ.get("NEXON_RECON_SHAREPOINT_MODE", "graph"))
+    parser.add_argument(
+        "--auth-mode",
+        choices=["auth_proxy"],
+        default=os.environ.get("NEXON_RECON_SHAREPOINT_AUTH_MODE", "auth_proxy"),
+    )
+    parser.add_argument("--binding", type=Path)
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    check = subparsers.add_parser("check-spaces")
-    check.add_argument("--provider")
-    check.add_argument("--output", type=Path, required=True)
-
-    find = subparsers.add_parser("find-upload")
-    find.add_argument("--provider", required=True)
-    find.add_argument("--source-name")
-    find.add_argument("--output", type=Path, required=True)
 
     download = subparsers.add_parser("download-upload")
     download.add_argument("--provider", required=True)
     download.add_argument("--source-name", required=True)
+    download.add_argument("--source-item-id")
     download.add_argument("--destination", type=Path, required=True)
     download.add_argument("--output", type=Path, required=True)
 
-    move = subparsers.add_parser("move-upload-to-run-source")
-    move.add_argument("--provider", required=True)
-    move.add_argument("--source-name", required=True)
-    move.add_argument("--run-root", required=True)
-    move.add_argument("--copy", action="store_true")
-    move.add_argument("--output", type=Path, required=True)
-
-    upload = subparsers.add_parser("upload-artifact")
-    upload.add_argument("--local-file", type=Path, required=True)
-    upload.add_argument("--sharepoint-path", required=True)
-    upload.add_argument("--output", type=Path, required=True)
-
     args = parser.parse_args()
+    configure_runtime(auth_mode=args.auth_mode, binding_path=args.binding)
+    if args.mode == "graph" and args.binding is None:
+        raise RuntimeError(
+            "sharepoint_binding_required: graph operations require a validated target binding."
+        )
     config = load_config(args.config)
     return {
-        "check-spaces": check_spaces,
-        "find-upload": find_upload,
         "download-upload": download_upload,
-        "move-upload-to-run-source": move_upload_to_run_source,
-        "upload-artifact": upload_artifact,
     }[args.command](args, config)
 
 

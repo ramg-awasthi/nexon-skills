@@ -20,6 +20,29 @@ from recon_core.common import RAW_WORKBOOK_COLUMNS, read_json, write_json  # noq
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "recon_settings.yaml"
 
 
+def _sharepoint_binding(root: Path) -> Path:
+    path = root / "sharepoint-target-binding.json"
+    write_json(
+        path,
+        {
+            "contract_version": 1,
+            "site_name": "Nexon Reconciliation Automation",
+            "site_id": "nexonap.sharepoint.com,site-guid,web-guid",
+            "site_url": "https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation",
+            "hostname": "nexonap.sharepoint.com",
+            "site_path": "/sites/NexonReconciliationAutomation",
+            "drive_id": "drive-id",
+            "drive_name": "Documents",
+            "drive_web_url": (
+                "https://nexonap.sharepoint.com/sites/"
+                "NexonReconciliationAutomation/Shared%20Documents"
+            ),
+            "discovery_sha256": "a" * 64,
+        },
+    )
+    return path
+
+
 def _all_capabilities() -> dict:
     return {
         "capabilities": {
@@ -32,6 +55,12 @@ def _all_capabilities() -> dict:
             "current_workbook_generation": True,
         }
     }
+
+
+def _download_receipt(root: Path) -> Path:
+    path = root / "download-receipt.json"
+    write_json(path, {"status": "test-fixture"})
+    return path
 
 
 def _args(
@@ -62,6 +91,17 @@ def _args(
         provider_account_id=7 if run_mode == "reconciliation" else None,
         investigation=investigation,
         publication_receipt=publication_receipt,
+        sharepoint_binding=(
+            _sharepoint_binding(source.parent)
+            if source is not None and not local_only
+            else None
+        ),
+        source_download_receipt=(
+            _download_receipt(source.parent)
+            if source is not None and not local_only
+            else None
+        ),
+        sharepoint_auth_mode="auth_proxy",
         local_only=local_only,
         output=None,
     )
@@ -212,6 +252,11 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
         )
         with (
             patch.object(run_recon, "capability_manifest", return_value=_all_capabilities()),
+            patch.object(
+                run_recon,
+                "_verify_download_receipt",
+                return_value={"source_item_id": "source-item"},
+            ),
             patch.object(run_recon, "_run_command", side_effect=harness.command),
             persistence,
             patch.dict(
@@ -234,14 +279,15 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
         publication_receipt: Path | None = None,
         local_only: bool,
     ) -> dict:
-        return run_recon.run(
-            _args(
-                resume_root=run_root,
-                investigation=investigation,
-                publication_receipt=publication_receipt,
-                local_only=local_only,
+        with patch.object(run_recon, "_verify_published_item"):
+            return run_recon.run(
+                _args(
+                    resume_root=run_root,
+                    investigation=investigation,
+                    publication_receipt=publication_receipt,
+                    local_only=local_only,
+                )
             )
-        )
 
     def _mutate_json(
         self,
@@ -382,6 +428,12 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
             )
             self.assertEqual("awaiting_publication", result["status"])
             publication_set = read_json(run_root / "manifest" / "publication_set.json")
+            self.assertFalse(
+                any(
+                    item["relative_path"].startswith("source/")
+                    for item in publication_set["artifacts"]
+                )
+            )
             run_prefix = (
                 f"/recon-result-space/AAPT/{run_root.parent.parent.name}/"
                 f"{run_root.parent.name}/{run_root.name}/"

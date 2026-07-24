@@ -105,6 +105,8 @@ class RuntimeStateAndPersistenceTests(unittest.TestCase):
             )
             base["provider"] = "Equinix"
             base["intake_mode"] = "provider_api"
+            base["run_mode"] = "reconciliation"
+            base["copy"] = False
             with self.assertRaisesRegex(RuntimeError, "provider_api_not_available"):
                 run_recon.run(Namespace(**base))
 

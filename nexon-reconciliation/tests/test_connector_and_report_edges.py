@@ -54,15 +54,13 @@ def read_json(path: Path) -> dict:
 
 
 class ConnectorAndReportEdgeTests(unittest.TestCase):
-    def test_sharepoint_connector_local_download_and_upload_artifact(self) -> None:
+    def test_sharepoint_connector_local_download(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = root / "config.yaml"
             write_config(config)
             upload_path = Path("/recon-upload-space") / "AAPT"
-            result_path = Path("/recon-result-space") / "AAPT"
             upload_path.mkdir(parents=True, exist_ok=True)
-            result_path.mkdir(parents=True, exist_ok=True)
             source = upload_path / "download-me.csv"
             source.write_text("invoice", encoding="utf-8")
             download_output = root / "download.json"
@@ -91,76 +89,12 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
                     text=True,
                     check=False,
                 )
-                upload_output = root / "upload.json"
-                target = result_path / "uploaded" / "manifest.json"
-                upload = subprocess.run(
-                    [
-                        sys.executable,
-                        str(SCRIPTS / "sharepoint_connector.py"),
-                        "--config",
-                        str(config),
-                        "--mode",
-                        "local",
-                        "upload-artifact",
-                        "--local-file",
-                        str(staged),
-                        "--sharepoint-path",
-                        str(target),
-                        "--output",
-                        str(upload_output),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
             finally:
                 source.unlink(missing_ok=True)
-                target.unlink(missing_ok=True)
 
             self.assertEqual(0, download.returncode, download.stderr + download.stdout)
-            self.assertEqual(0, upload.returncode, upload.stderr + upload.stdout)
             self.assertEqual("downloaded", read_json(download_output)["status"])
-            self.assertEqual("uploaded", read_json(upload_output)["status"])
             self.assertEqual("invoice", staged.read_text(encoding="utf-8").strip())
-
-    def test_sharepoint_connector_local_find_reports_ambiguous_uploads(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config = root / "config.yaml"
-            write_config(config)
-            upload_path = Path("/recon-upload-space") / "AAPT"
-            upload_path.mkdir(parents=True, exist_ok=True)
-            first = upload_path / "ambiguous-a.csv"
-            second = upload_path / "ambiguous-b.csv"
-            first.write_text("a", encoding="utf-8")
-            second.write_text("b", encoding="utf-8")
-            output = root / "find.json"
-
-            try:
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(SCRIPTS / "sharepoint_connector.py"),
-                        "--config",
-                        str(config),
-                        "--mode",
-                        "local",
-                        "find-upload",
-                        "--provider",
-                        "AAPT",
-                        "--output",
-                        str(output),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-            finally:
-                first.unlink(missing_ok=True)
-                second.unlink(missing_ok=True)
-
-            self.assertEqual(2, result.returncode)
-            self.assertGreaterEqual(read_json(output)["count"], 2)
 
     def test_write_reports_rejects_row_count_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -364,21 +298,16 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
         paths = RunPaths.from_root(Path("run"))
         self.assertEqual(Path("run") / "source", paths.source)
 
-    def test_sharepoint_legacy_graph_helpers_fail_closed_without_env(self) -> None:
-        old_token = os.environ.pop("NEXON_RECON_GRAPH_ACCESS_TOKEN", None)
-        old_drive = os.environ.pop("NEXON_RECON_SHAREPOINT_DRIVE_ID", None)
-        try:
-            with self.assertRaisesRegex(RuntimeError, "sharepoint_auth_missing"):
-                sharepoint_connector._token()
-            with self.assertRaisesRegex(RuntimeError, "sharepoint_drive_missing"):
-                sharepoint_connector._drive_id()
-            os.environ["NEXON_RECON_SHAREPOINT_DRIVE_ID"] = "drive-1"
-            self.assertIn("/drives/drive-1/root:", sharepoint_connector._drive_path("/recon-upload-space/AAPT"))
-        finally:
-            if old_token is not None:
-                os.environ["NEXON_RECON_GRAPH_ACCESS_TOKEN"] = old_token
-            if old_drive is not None:
-                os.environ["NEXON_RECON_SHAREPOINT_DRIVE_ID"] = old_drive
+    def test_sharepoint_profile_graph_helpers_require_binding(self) -> None:
+        sharepoint_connector.configure_runtime(
+            auth_mode="auth_proxy", binding_path=None
+        )
+        with self.assertRaisesRegex(RuntimeError, "sharepoint_drive_missing"):
+            sharepoint_connector._drive_id()
+        with self.assertRaisesRegex(RuntimeError, "auth_mode_invalid"):
+            sharepoint_connector.configure_runtime(
+                auth_mode="legacy", binding_path=None
+            )
 
     def test_sharepoint_graph_request_and_json_helpers_without_live_network(self) -> None:
         class FakeResponse:
@@ -391,49 +320,30 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
             def read(self) -> bytes:
                 return b'{"ok": true}'
 
-        old_token = os.environ.get("NEXON_RECON_GRAPH_ACCESS_TOKEN")
         old_urlopen = sharepoint_connector.urlopen
+        old_binding = sharepoint_connector._BINDING
         captured: list[object] = []
         try:
-            os.environ["NEXON_RECON_GRAPH_ACCESS_TOKEN"] = "token"
-
+            sharepoint_connector._BINDING = {
+                "site_id": "site-1",
+                "drive_id": "drive-1",
+            }
+            sharepoint_connector._AUTHORIZED_ITEM_IDS = {"item-1"}
             def fake_urlopen(request: object, timeout: int) -> FakeResponse:
                 captured.append((request, timeout))
                 return FakeResponse()
 
             sharepoint_connector.urlopen = fake_urlopen
-            self.assertEqual(b'{"ok": true}', sharepoint_connector._graph_request("POST", "/test", {"a": 1}))
-            self.assertEqual({"ok": True}, sharepoint_connector._graph_json("GET", "/test"))
+            with self.assertRaisesRegex(RuntimeError, "sharepoint_read_only_violation"):
+                sharepoint_connector._graph_request("POST", "/test", {"a": 1})
+            path = "/drives/drive-1/items/item-1"
+            self.assertEqual(b'{"ok": true}', sharepoint_connector._graph_request("GET", path))
+            self.assertEqual({"ok": True}, sharepoint_connector._graph_json("GET", path))
             self.assertEqual(2, len(captured))
         finally:
             sharepoint_connector.urlopen = old_urlopen
-            if old_token is None:
-                os.environ.pop("NEXON_RECON_GRAPH_ACCESS_TOKEN", None)
-            else:
-                os.environ["NEXON_RECON_GRAPH_ACCESS_TOKEN"] = old_token
-
-    def test_sharepoint_client_credentials_token(self) -> None:
-        class FakeResponse:
-            def __enter__(self) -> "FakeResponse":
-                return self
-
-            def __exit__(self, *_args: object) -> None:
-                return None
-
-            def read(self) -> bytes:
-                return b'{"access_token": "application-token"}'
-
-        env = {
-            "NEXON_RECON_SHAREPOINT_TENANT_ID": "tenant",
-            "NEXON_RECON_SHAREPOINT_CLIENT_ID": "client",
-            "NEXON_RECON_SHAREPOINT_CLIENT_SECRET": "secret",
-        }
-        with patch.dict(os.environ, env, clear=True), patch.object(
-            sharepoint_connector, "urlopen", return_value=FakeResponse()
-        ) as mocked:
-            self.assertEqual("application-token", sharepoint_connector._token())
-            request = mocked.call_args.args[0]
-            self.assertIn("/tenant/oauth2/v2.0/token", request.full_url)
+            sharepoint_connector._BINDING = old_binding
+            sharepoint_connector._AUTHORIZED_ITEM_IDS = set()
 
     def test_sharepoint_graph_mode_commands_without_live_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -444,19 +354,16 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
             local_file.write_text("artifact", encoding="utf-8")
             calls: list[tuple[str, object]] = []
             old_get_item = sharepoint_connector._get_item
-            old_children = sharepoint_connector._children
             old_graph_request = sharepoint_connector._graph_request
             old_graph_json = sharepoint_connector._graph_json
-            old_ensure_folder = sharepoint_connector._ensure_folder
             old_drive_id = sharepoint_connector._drive_id
             try:
                 sharepoint_connector._drive_id = lambda: "drive-1"
-                sharepoint_connector._get_item = lambda path: {"id": f"id:{path}", "name": Path(path).name}
-                sharepoint_connector._children = lambda path: [
-                    {"name": "invoice.csv", "id": "item-1", "size": 123, "file": {}},
-                    {"name": "folder", "id": "folder-1", "folder": {}},
-                ]
-
+                sharepoint_connector._get_item = lambda path: {
+                    "id": f"id:{path}",
+                    "name": Path(path).name,
+                    "webUrl": "https://tenant/item",
+                }
                 def fake_graph_request(method: str, path: str, body: dict | bytes | None = None, content_type: str = "application/json") -> bytes:
                     calls.append(("request", method, path, body, content_type))
                     return b"downloaded"
@@ -467,60 +374,23 @@ class ConnectorAndReportEdgeTests(unittest.TestCase):
 
                 sharepoint_connector._graph_request = fake_graph_request
                 sharepoint_connector._graph_json = fake_graph_json
-                sharepoint_connector._ensure_folder = lambda path: {"id": f"folder:{path}"}
+                sharepoint_connector._BINDING = {"site_id": "site-1", "drive_id": "drive-1"}
+                sharepoint_connector._BINDING_SHA256 = "a" * 64
                 config: dict = {}
 
                 self.assertEqual(
                     0,
-                    sharepoint_connector.check_spaces(
-                        SimpleNamespace(provider="AAPT", mode="graph", output=output),
-                        config,
-                    ),
-                )
-                self.assertEqual("ok", read_json(output)["status"])
-
-                self.assertEqual(
-                    0,
-                    sharepoint_connector.find_upload(
-                        SimpleNamespace(provider="AAPT", source_name="invoice.csv", mode="graph", output=output),
-                        config,
-                    ),
-                )
-                self.assertEqual(1, read_json(output)["count"])
-
-                self.assertEqual(
-                    0,
                     sharepoint_connector.download_upload(
-                        SimpleNamespace(provider="AAPT", source_name="invoice.csv", destination=staged, mode="graph", output=output),
+                        SimpleNamespace(provider="AAPT", source_name="invoice.csv", source_item_id="id:/recon-upload-space/AAPT/invoice.csv", destination=staged, mode="graph", output=output),
                         config,
                     ),
                 )
                 self.assertEqual(b"downloaded", staged.read_bytes())
-
-                self.assertEqual(
-                    0,
-                    sharepoint_connector.move_upload_to_run_source(
-                        SimpleNamespace(provider="AAPT", source_name="invoice.csv", run_root="/recon-result-space/AAPT/2026/07/run", copy=False, mode="graph", output=output),
-                        config,
-                    ),
-                )
-                self.assertEqual("moved", read_json(output)["status"])
-
-                self.assertEqual(
-                    0,
-                    sharepoint_connector.upload_artifact(
-                        SimpleNamespace(local_file=local_file, sharepoint_path="/recon-result-space/AAPT/manifest.json", mode="graph", output=output),
-                        config,
-                    ),
-                )
-                self.assertEqual("uploaded", read_json(output)["status"])
                 self.assertTrue(calls)
             finally:
                 sharepoint_connector._get_item = old_get_item
-                sharepoint_connector._children = old_children
                 sharepoint_connector._graph_request = old_graph_request
                 sharepoint_connector._graph_json = old_graph_json
-                sharepoint_connector._ensure_folder = old_ensure_folder
                 sharepoint_connector._drive_id = old_drive_id
 
 

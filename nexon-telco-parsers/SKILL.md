@@ -52,7 +52,7 @@ It does not own:
 Use:
 
 ```text
-python scripts/parse_provider_invoice.py --config ../nexon-reconciliation/config/recon_settings.yaml --provider <provider> --input-dir <dir> --output <json> --warnings <json> --run-id <run_id> --manifest <json>
+python skills/nexon-telco-parsers/scripts/parse_provider_invoice.py --config skills/nexon-reconciliation/config/recon_settings.yaml --provider <provider> --input-dir <dir> --output <json> --warnings <json> --run-id <run_id> --manifest <json>
 ```
 
 The command routes through:
@@ -84,7 +84,7 @@ scripts/provider_adapters/
   equinix/parser.py
 ```
 
-Implementation history and readiness evidence belong outside runtime instructions. Normal parser routing is code-owned and must not be moved into runtime config.
+Parser routing is code-owned and must not be moved into runtime config.
 
 ## Parser Contract
 

@@ -7,12 +7,17 @@ description: Run or validate Nexon telco invoice reconciliation for AAPT, Telstr
 
 Use this skill for the shared reconciliation lifecycle. Use `nexon-telco-parsers` for deterministic invoice extraction.
 
-`nexon-recon-agent` owns the run. It hands unresolved rows only to `nexon-recon-exception-investigator`.
+`nexon-recon-agent` owns orchestration and tool routing. `run_recon.py` owns
+deterministic execution and durable lifecycle state. The agent hands unresolved
+rows only to `nexon-recon-exception-investigator`.
 
 ## Safety Rules
 
-- Use only the `Nexon Reconciliation Automation` SharePoint site and `Shared Documents`.
-- Use native SharePoint tools for listing, cloud move/copy, uploads, and links.
+- Use only the `Nexon Reconciliation Automation` SharePoint site at
+  `/sites/NexonReconciliationAutomation` and its resolver-validated default
+  document library.
+- Use native SharePoint tools for listing, cloud move/copy, and uploads. Capture
+  tool-returned item URLs for receipts; do not create share links.
 - Use the approved binary-capable connector for ZIP, PDF, XLSX, and other binary downloads.
 - Never parse invoices with model reasoning or invent rows.
 - Never use parser-only output as a customer reconciliation result.
@@ -25,11 +30,26 @@ Use this skill for the shared reconciliation lifecycle. Use `nexon-telco-parsers
 
 ```text
 Site: Nexon Reconciliation Automation
-URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
-Library: Shared Documents
+Path: /sites/NexonReconciliationAutomation
+Library: the site's default document library
 Upload: /recon-upload-space/<provider>/
 Result: /recon-result-space/<provider>/<yyyy>/<MM>/<run_id>/
 ```
+
+Resolve the physical target before every run. Save the unchanged native SharePoint
+`List Sites` result, then run:
+
+```text
+python skills/nexon-reconciliation/scripts/resolve_sharepoint_target.py \
+  --sites-file <sharepoint_sites.json> \
+  --auth-mode auth_proxy \
+  --output <sharepoint_target_binding.json>
+```
+
+The resolver accepts exactly one match for the fixed site name and path, validates
+that the active access profile can read that site and its default document
+library, and emits the only permitted site/drive binding. Never hand-author or
+edit this binding.
 
 Run ID:
 
@@ -40,26 +60,34 @@ Run ID:
 ## Source Intake
 
 Resolve exactly one cloud source item. Download and checksum its binary bytes before moving it.
+Pin the download to the selected item ID and retain the connector's provenance
+receipt. If the active access profile changes, discard the target binding and
+resolve it again.
 
 - `parser_validation` always copies locally and leaves the cloud source unchanged.
-- `reconciliation` moves the cloud source into the run `source/` folder only after binary staging succeeds and the run ID exists.
+- `manual_upload` reconciliation moves the cloud source into the run `source/`
+  folder only after binary staging succeeds and the run ID exists.
+- `provider_api` reconciliation does not perform a SharePoint source move.
 
 Do not create missing SharePoint root/provider folders during a run.
 
 ## Runtime Entry Point
 
-Use `python scripts/run_recon.py ...`. Do not manually reproduce its stage sequence when the state machine is available.
+Use `python skills/nexon-reconciliation/scripts/run_recon.py ...`. Do not manually reproduce its stage sequence when the state machine is available.
 
 Parser validation:
 
 ```text
-python scripts/run_recon.py \
-  --config config/recon_settings.yaml \
+python skills/nexon-reconciliation/scripts/run_recon.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
   --provider <provider> \
   --source-file <staged_file> \
   --result-root <local_result_root> \
   --run-mode parser_validation \
   --intake-mode manual_upload \
+  --sharepoint-binding <sharepoint_target_binding.json> \
+  --source-download-receipt <download_receipt.json> \
+  --sharepoint-auth-mode auth_proxy \
   --copy \
   --output <result.json>
 ```
@@ -67,8 +95,8 @@ python scripts/run_recon.py \
 Reconciliation:
 
 ```text
-python scripts/run_recon.py \
-  --config config/recon_settings.yaml \
+python skills/nexon-reconciliation/scripts/run_recon.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
   --provider <provider> \
   --source-file <staged_file> \
   --result-root <local_result_root> \
@@ -77,8 +105,13 @@ python scripts/run_recon.py \
   --billing-period <period> \
   --billing-sql-file <billing_query.sql> \
   --provider-account-id <id> \
+  --sharepoint-binding <sharepoint_target_binding.json> \
+  --sharepoint-auth-mode auth_proxy \
   --output <result.json>
 ```
+
+Add `--source-download-receipt <download_receipt.json>` for `manual_upload`.
+Provider API intake uses its provider provenance manifest instead.
 
 The command fails closed with `core_reconciliation_not_available` unless its capability manifest enables every required stage.
 
@@ -87,8 +120,8 @@ The command fails closed with `core_reconciliation_not_available` unless its cap
 For `awaiting_exception_investigation`, resume the same run:
 
 ```text
-python scripts/run_recon.py \
-  --config config/recon_settings.yaml \
+python skills/nexon-reconciliation/scripts/run_recon.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
   --resume-run-root <run_root> \
   --investigation <exception_investigation.json> \
   --billing-period <period> \
@@ -98,8 +131,8 @@ python scripts/run_recon.py \
 For `awaiting_publication`, upload every listed artifact to the exact SharePoint run folder, then resume:
 
 ```text
-python scripts/run_recon.py \
-  --config config/recon_settings.yaml \
+python skills/nexon-reconciliation/scripts/run_recon.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
   --resume-run-root <run_root> \
   --publication-receipt <publication_receipt.json> \
   --output <result.json>

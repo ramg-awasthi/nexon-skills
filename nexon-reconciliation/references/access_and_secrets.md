@@ -1,22 +1,29 @@
 # Access And Secrets
 
-Fleet environment provisioning is maintained outside this portable skill. This
-reference defines the runtime identities and variable names the skill expects.
+Authoritative setup details live in `../../../docs/OPERATIONS.md`.
 
 ## SharePoint Access
 
-Use the native SharePoint tool for listing, selection, movement, artifact upload, and links. Use an approved Graph service principal or equivalent binary-capable connector to download ZIP, PDF, XLSX, and other binary sources.
+Use the native SharePoint tool for listing, selection, movement, and artifact
+upload. Capture tool-returned item URLs for receipts. Use the binary connector
+through the active SharePoint access profile
+to download ZIP, PDF, XLSX, and other binary sources. Credentials stay in the
+profile and are not passed through prompts or files.
 
-The only approved production storage target is:
+The only approved logical storage target is:
 
 ```text
 Site: Nexon Reconciliation Automation
-Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
-Library: Shared Documents
-Browser URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation/Shared%20Documents/Forms/AllItems.aspx
+Site path: /sites/NexonReconciliationAutomation
+Library: the site's default document library
 ```
 
-Do not route normal runs to the old personal OneDrive `Recon` folder, the `Account Recon` site, or any alternate site found by search. If the native SharePoint tool cannot access this exact site and library, stop with `setup_incomplete`.
+Tenant hostname, site ID, drive ID, and library URL come only from
+`resolve_sharepoint_target.py`. The resolver cross-checks the native SharePoint
+site listing against the active access profile, then creates a validated binding.
+Do not route normal runs to the personal OneDrive `Recon` folder, the
+`Account Recon` site, or any alternate site found by search. Do not hand-author
+the binding. Stop if the exact site name and path are absent or ambiguous.
 
 The native SharePoint tool must handle:
 
@@ -30,7 +37,8 @@ If the native SharePoint tool cannot confirm permissions, stop with `setup_incom
 
 ## Non-SharePoint Secrets
 
-Provider API and billing/Inomial integrations still use approved secret-store or environment-backed credentials.
+Provider API and billing/Inomial integrations use approved secret-store or
+environment-backed credentials.
 
 - Do not store credentials in prompts.
 - Do not store credentials in `config/recon_settings.yaml`.
@@ -50,8 +58,8 @@ Use the native Outlook Send Email tool for failure email notifications when enab
 
 SharePoint:
 
-1. Native SharePoint tool for listing, moves, uploads, and links.
-2. Approved Graph application connector for binary download.
+1. Native SharePoint tool for listing, moves, uploads, and returned item URLs.
+2. Profile-backed deterministic Graph connector for binary download.
 3. Stop if either required path lacks permissions or required file operations.
 
 Billing/Inomial:

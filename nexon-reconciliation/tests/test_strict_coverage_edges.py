@@ -681,20 +681,20 @@ class StrictCoverageEdgeTests(unittest.TestCase):
 
     def test_sharepoint_graph_and_local_edge_paths_without_network(self) -> None:
         old_env = os.environ.copy()
-        os.environ["NEXON_RECON_GRAPH_ACCESS_TOKEN"] = "token"
-        os.environ["NEXON_RECON_SHAREPOINT_DRIVE_ID"] = "drive"
         original_urlopen = sharepoint_connector.urlopen
         original_graph_json = sharepoint_connector._graph_json
         original_get_item = sharepoint_connector._get_item
-        original_ensure_folder = sharepoint_connector._ensure_folder
         original_sharepoint_roots = sharepoint_connector.sharepoint_roots
+        original_binding = sharepoint_connector._BINDING
+        sharepoint_connector._BINDING = {"site_id": "site", "drive_id": "drive"}
+        sharepoint_connector._AUTHORIZED_ITEM_IDS = {"item"}
         try:
             def raise_graph_error(*_args: object, **_kwargs: object) -> object:
                 raise HTTPError("https://graph.test", 403, "no", {}, io.BytesIO(b"denied"))
 
             sharepoint_connector.urlopen = raise_graph_error
             with self.assertRaisesRegex(RuntimeError, "SharePoint Graph request failed"):
-                sharepoint_connector._graph_request("GET", "/me")
+                sharepoint_connector._graph_request("GET", "/drives/drive/items/item")
 
             class FakeResponse:
                 def __enter__(self) -> "FakeResponse":
@@ -707,65 +707,19 @@ class StrictCoverageEdgeTests(unittest.TestCase):
                     return b"{}"
 
             sharepoint_connector.urlopen = lambda *_args, **_kwargs: FakeResponse()
-            self.assertEqual(b"{}", sharepoint_connector._graph_request("PUT", "/upload", b"payload", "application/octet-stream"))
+            with self.assertRaisesRegex(RuntimeError, "sharepoint_read_only_violation"):
+                sharepoint_connector._graph_request("PUT", "/upload", b"payload", "application/octet-stream")
 
             sharepoint_connector._graph_json = lambda method, path, body=None: {"value": [{"name": "a.csv", "file": {}, "id": "1", "size": 1}]}
             self.assertEqual({"value": [{"name": "a.csv", "file": {}, "id": "1", "size": 1}]}, sharepoint_connector._get_item("/x"))
-            self.assertEqual(1, len(sharepoint_connector._children("/x")))
 
-            def fake_get_item(path: str) -> dict:
-                if path == "new":
-                    raise RuntimeError("missing")
-                return {"id": f"id-{path}"}
-
-            created: list[dict] = []
-            sharepoint_connector._get_item = fake_get_item
-            sharepoint_connector._graph_json = lambda method, path, body=None: created.append({"method": method, "path": path, "body": body}) or {"id": "created"}
-            self.assertEqual({"id": "id-new/child"}, sharepoint_connector._ensure_folder("new/child"))
-            self.assertEqual("POST", created[0]["method"])
-
-            with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                output = root / "spaces.json"
-                config = {"provider_api_adapters": {"aapt": True}}
-                sharepoint_connector.sharepoint_roots = lambda config: (
-                    root / "upload",
-                    root / "result",
-                )
-                args = SimpleNamespace(provider="AAPT", mode="local", output=output)
-                self.assertEqual(2, sharepoint_connector.check_spaces(args, config))
-                self.assertEqual("setup_incomplete", read_json(output)["status"])
-
-                upload_root = root / "upload"
-                result_root = root / "result"
-                (upload_root / "AAPT").mkdir(parents=True, exist_ok=True)
-                (result_root / "AAPT").mkdir(parents=True, exist_ok=True)
-                source = upload_root / "AAPT" / "invoice.csv"
-                source.write_text("invoice", encoding="utf-8")
-                old_roots = sharepoint_connector.sharepoint_roots
-                sharepoint_connector.sharepoint_roots = lambda config: (upload_root, result_root)
-                try:
-                    output = root / "move.json"
-                    args = SimpleNamespace(provider="AAPT", mode="local", source_name="invoice.csv", run_root=str(root / "run"), copy=True, output=output)
-                    self.assertEqual(0, sharepoint_connector.move_upload_to_run_source(args, config))
-                    self.assertEqual("copied", read_json(output)["status"])
-                finally:
-                    sharepoint_connector.sharepoint_roots = old_roots
-
-            sharepoint_connector._get_item = lambda path: {"id": "source-id"}
-            sharepoint_connector._ensure_folder = lambda path: {"id": "parent-id"}
-            sharepoint_connector._graph_json = lambda method, path, body=None: {"async": True, "method": method, "path": path, "body": body}
-            with tempfile.TemporaryDirectory() as tmp:
-                output = Path(tmp) / "graph-move.json"
-                args = SimpleNamespace(provider="AAPT", mode="graph", source_name="invoice.csv", run_root="/result/AAPT/2026/07/run", copy=True, output=output)
-                self.assertEqual(0, sharepoint_connector.move_upload_to_run_source(args, {"provider_api_adapters": {"aapt": True}}))
-                self.assertEqual("copy_started", read_json(output)["status"])
         finally:
             sharepoint_connector.urlopen = original_urlopen
             sharepoint_connector._graph_json = original_graph_json
             sharepoint_connector._get_item = original_get_item
-            sharepoint_connector._ensure_folder = original_ensure_folder
             sharepoint_connector.sharepoint_roots = original_sharepoint_roots
+            sharepoint_connector._BINDING = original_binding
+            sharepoint_connector._AUTHORIZED_ITEM_IDS = set()
             os.environ.clear()
             os.environ.update(old_env)
 

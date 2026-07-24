@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -12,8 +11,6 @@ from pathlib import Path
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-FIXED_UPLOAD_ROOT = Path("/recon-upload-space")
-FIXED_RESULT_ROOT = Path("/recon-result-space")
 
 
 def write_config(
@@ -60,96 +57,6 @@ def read_json(path: Path) -> dict:
 
 
 class ConnectorBillingAndFailureTests(unittest.TestCase):
-    def test_sharepoint_connector_local_mode_checks_finds_and_moves_upload(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            upload_root = FIXED_UPLOAD_ROOT
-            result_root = FIXED_RESULT_ROOT
-            shutil.rmtree(upload_root / "AAPT", ignore_errors=True)
-            shutil.rmtree(result_root / "AAPT", ignore_errors=True)
-            (upload_root / "AAPT").mkdir(parents=True, exist_ok=True)
-            (result_root / "AAPT").mkdir(parents=True, exist_ok=True)
-            source = upload_root / "AAPT" / "invoice.zip"
-            source.write_text("sample", encoding="utf-8")
-            config = root / "config.yaml"
-            write_config(config, upload_root, result_root)
-
-            check_output = root / "check.json"
-            check = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "sharepoint_connector.py"),
-                    "--config",
-                    str(config),
-                    "--mode",
-                    "local",
-                    "check-spaces",
-                    "--provider",
-                    "AAPT",
-                    "--output",
-                    str(check_output),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(0, check.returncode, check.stderr)
-
-            find_output = root / "find.json"
-            find = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "sharepoint_connector.py"),
-                    "--config",
-                    str(config),
-                    "--mode",
-                    "local",
-                    "find-upload",
-                    "--provider",
-                    "AAPT",
-                    "--source-name",
-                    "invoice.zip",
-                    "--output",
-                    str(find_output),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(0, find.returncode, find.stderr)
-            self.assertEqual(1, read_json(find_output)["count"])
-
-            run_root = result_root / "AAPT" / "2026" / "07" / "AAPT_20260709_153012_A1B2C"
-            move_output = root / "move.json"
-            move = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPTS / "sharepoint_connector.py"),
-                    "--config",
-                    str(config),
-                    "--mode",
-                    "local",
-                    "move-upload-to-run-source",
-                    "--provider",
-                    "AAPT",
-                    "--source-name",
-                    "invoice.zip",
-                    "--run-root",
-                    str(run_root),
-                    "--output",
-                    str(move_output),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            self.assertEqual(0, move.returncode, move.stderr)
-            self.assertFalse(source.exists())
-            self.assertTrue((run_root / "source" / "invoice.zip").is_file())
-            shutil.rmtree(upload_root / "AAPT", ignore_errors=True)
-            shutil.rmtree(result_root / "AAPT", ignore_errors=True)
-
     def test_billing_query_executes_agent_read_only_sqlite_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

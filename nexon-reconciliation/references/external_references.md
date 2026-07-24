@@ -11,9 +11,14 @@ Do not use packaging or plugin research to change runtime reconciliation behavio
 
 ## SharePoint Runtime
 
-Runtime SharePoint listing, movement, upload, and links use the native SharePoint tool. Binary source download requires an approved Graph service principal or equivalent binary-capable connector.
+Runtime SharePoint listing, movement, upload, and returned item URLs use the native SharePoint
+tool. Binary source download uses the deterministic connector through the active
+Fleet SharePoint access profile.
 
-The active runtime site is `Nexon Reconciliation Automation` at `https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation`, library `Shared Documents`.
+The runtime contract requires site name `Nexon Reconciliation Automation`, path
+`/sites/NexonReconciliationAutomation`, and the site's default document library.
+The active profile determines the tenant hostname; the resolver validates and
+freezes the physical site and drive identity.
 
 ## Observability
 

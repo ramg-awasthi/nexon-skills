@@ -785,13 +785,14 @@ class AdditionalStrictBranchEdgeTests(unittest.TestCase):
                 self.assertEqual(0, call_main(core_persistence, argv))
 
     def test_optional_update_notification_report_and_common_edges(self) -> None:
+        original_import = builtins.__import__
         with patch.object(
             builtins,
             "__import__",
             side_effect=lambda name, *args, **kwargs: (
                 (_ for _ in ()).throw(ImportError("openpyxl"))
                 if name == "openpyxl"
-                else builtins.__import__(name, *args, **kwargs)
+                else original_import(name, *args, **kwargs)
             ),
         ):
             with self.assertRaisesRegex(RuntimeError, "openpyxl is required"):
@@ -1103,84 +1104,6 @@ class AdditionalStrictBranchEdgeTests(unittest.TestCase):
                         config,
                     ),
                 )
-                upload_output = root / "upload.json"
-                self.assertEqual(
-                    0,
-                    sharepoint_connector.upload_artifact(
-                        Namespace(
-                            local_file=root / "staged" / "invoice.csv",
-                            sharepoint_path=str(result_root / "AAPT" / "artifact.csv"),
-                            output=upload_output,
-                            mode="local",
-                        ),
-                        config,
-                    ),
-                )
-
-            with patch.object(
-                sharepoint_connector,
-                "_children",
-                return_value=[{"name": "a.csv", "id": "1", "size": 1, "file": {}}],
-            ), patch.object(
-                sharepoint_connector,
-                "sharepoint_roots",
-                return_value=(upload_root, result_root),
-            ):
-                self.assertEqual(
-                    0,
-                    sharepoint_connector.find_upload(
-                        Namespace(
-                            provider="AAPT",
-                            source_name=None,
-                            output=root / "find.json",
-                            mode="graph",
-                        ),
-                        config,
-                    ),
-                )
-
-            class ErrorBody:
-                def read(self) -> bytes:
-                    return b"denied"
-
-                def close(self) -> None:
-                    return None
-
-            error = HTTPError("https://token", 401, "no", {}, ErrorBody())
-            with patch.dict(
-                os.environ,
-                {
-                    "NEXON_RECON_SHAREPOINT_TENANT_ID": "tenant",
-                    "NEXON_RECON_SHAREPOINT_CLIENT_ID": "client",
-                    "NEXON_RECON_SHAREPOINT_CLIENT_SECRET": "secret",
-                },
-                clear=True,
-            ), patch.object(sharepoint_connector, "urlopen", side_effect=error):
-                with self.assertRaisesRegex(RuntimeError, "sharepoint_auth_failed"):
-                    sharepoint_connector._token()
-
-            class TokenResponse:
-                def __enter__(self) -> "TokenResponse":
-                    return self
-
-                def __exit__(self, *_args: object) -> None:
-                    return None
-
-                def read(self) -> bytes:
-                    return b"{}"
-
-            with patch.dict(
-                os.environ,
-                {
-                    "NEXON_RECON_SHAREPOINT_TENANT_ID": "tenant",
-                    "NEXON_RECON_SHAREPOINT_CLIENT_ID": "client",
-                    "NEXON_RECON_SHAREPOINT_CLIENT_SECRET": "secret",
-                },
-                clear=True,
-            ), patch.object(sharepoint_connector, "urlopen", return_value=TokenResponse()):
-                with self.assertRaisesRegex(RuntimeError, "did not include access_token"):
-                    sharepoint_connector._token()
-
             args = Namespace(
                 account_id="ACC",
                 invoice_id="INV",
