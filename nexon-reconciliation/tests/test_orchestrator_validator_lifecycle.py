@@ -88,7 +88,7 @@ def _database_receipts(root: Path) -> tuple[Path, Path]:
     write_json(
         capabilities,
         {
-            "service": "nexon-recon-sql-mcp",
+            "service": "nexon-recon-db-mcp",
             "environment": "dev",
             "capabilities": {
                 "read_queries": True,

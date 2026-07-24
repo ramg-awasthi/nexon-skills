@@ -8,7 +8,7 @@
 - SharePoint Intake MCP owns read-only source index/prepare and binary
   attestation.
 - Native SharePoint owns controlled moves and uploads.
-- Nexon Recon SQL MCP owns approved database capability.
+- Nexon Recon Database MCP owns approved database capability.
 - Native Outlook owns text-only notifications.
 
 ## SharePoint Runtime

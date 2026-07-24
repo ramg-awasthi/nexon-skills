@@ -66,7 +66,7 @@ def validate_database_mcp(
     flags = capabilities.get("capabilities")
     policy = capabilities.get("query_policy")
     if (
-        capabilities.get("service") != "nexon-recon-sql-mcp"
+        capabilities.get("service") != "nexon-recon-db-mcp"
         or capabilities.get("environment") != environment
         or not isinstance(flags, dict)
         or flags.get("read_queries") is not True

@@ -113,7 +113,7 @@ workbooks, or publication completion.
 Stop with `core_reconciliation_not_available` when any required capability is
 false. SharePoint Intake MCP must pass capability, probe, index, preparation,
 binary fetch, and result re-download checks. Native SharePoint must separately
-pass move and upload checks. Nexon Recon SQL MCP must pass capability and probe
+pass move and upload checks. Nexon Recon Database MCP must pass capability and probe
 checks and advertise read queries plus core persistence when enabled.
 
 Equinix one-to-many behavior remains provider evidence, not a reason to weaken

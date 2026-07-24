@@ -54,7 +54,7 @@ timestamp.
 
 ## Non-SharePoint Secrets
 
-- Database DSNs and credentials stay in the SQL MCP/service environment or
+- Database DSNs and credentials stay in the database MCP service environment or
   approved runtime secret boundary.
 - Provider API credentials stay in provider-specific secret bindings.
 - Outlook credentials remain in the native Outlook connection.
@@ -82,6 +82,6 @@ Invoices:
 
 Database:
 
-1. Approved SQL MCP tools when bound.
+1. Approved database MCP tools when bound.
 2. Guarded script connector only in an approved runtime.
 3. No free-form database client, browser query, or agent-generated update.
