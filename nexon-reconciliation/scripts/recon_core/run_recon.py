@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -29,6 +30,7 @@ from .run_state import create_state, finalize_state, update_stage
 from .safe_unpack import extract_zip
 from .sharepoint_binding import load_binding
 from . import sharepoint_connector
+from .sharepoint_file_index import load_index
 from .sqlserver_persistence import persist_sqlserver_run
 from .validate_run import validate_run
 from .write_reports import write_reports
@@ -153,6 +155,22 @@ def _freeze_sharepoint_binding(
     return binding
 
 
+def _freeze_source_index(
+    run_root: Path, receipt: dict[str, Any]
+) -> str | None:
+    verified_index_path = receipt.get("_verified_index_path")
+    if not verified_index_path:
+        return None
+    frozen_index_path = run_root / "manifest" / "sharepoint_file_index.json"
+    shutil.copy2(verified_index_path, frozen_index_path)
+    frozen_index_sha256 = sha256_file(frozen_index_path)
+    if frozen_index_sha256 != receipt["index_sha256"]:
+        raise RuntimeError(
+            "source_download_receipt_invalid: frozen source index checksum changed."
+        )
+    return frozen_index_sha256
+
+
 def _verify_download_receipt(
     *,
     receipt_path: Path,
@@ -160,6 +178,7 @@ def _verify_download_receipt(
     source_file: Path,
     provider: str,
     auth_mode: str,
+    allowed_spaces: tuple[str, ...] = ("upload",),
 ) -> dict[str, Any]:
     binding = load_binding(binding_path)
     receipt = read_json(receipt_path)
@@ -184,16 +203,66 @@ def _verify_download_receipt(
         raise RuntimeError(
             "source_download_receipt_invalid: source_item_id is required."
         )
+    source_space = str(receipt.get("space") or "").strip().lower()
+    if source_space not in allowed_spaces:
+        raise RuntimeError(
+            "source_download_receipt_invalid: source space is not allowed for this run."
+        )
+    source_path = str(receipt.get("source_path") or "")
+    source_path = sharepoint_connector._safe_drive_path(source_path)
+    provider_root = f"/recon-{source_space}-space/{provider}/"
+    if (
+        not source_path.startswith(provider_root)
+        or Path(source_path).name != source_name
+    ):
+        raise RuntimeError(
+            "source_download_receipt_invalid: source path is outside the provider space."
+        )
+    index_path_value = str(receipt.get("index_path") or "").strip()
+    index_sha256 = str(receipt.get("index_sha256") or "").strip()
+    source_etag = str(receipt.get("source_etag") or "").strip()
+    if not index_path_value or not index_sha256 or not source_etag:
+        raise RuntimeError(
+            "source_download_receipt_invalid: indexed source provenance is incomplete."
+        )
+    index_path = Path(index_path_value)
+    if not index_path.is_file() or sha256_file(index_path) != index_sha256:
+        raise RuntimeError(
+            "source_download_receipt_invalid: source index is missing or changed."
+        )
+    index = load_index(index_path)
+    if (
+        index.get("space") != source_space
+        or index.get("site_id") != binding["site_id"]
+        or index.get("drive_id") != binding["drive_id"]
+        or index.get("binding_sha256") != sha256_file(binding_path)
+    ):
+        raise RuntimeError(
+            "source_download_receipt_invalid: source index binding does not match."
+        )
+    index_matches = [
+        item
+        for item in index["files"]
+        if item.get("provider") == provider
+        and item.get("name") == source_name
+        and item.get("sharepoint_path") == source_path
+        and item.get("item_id") == item_id
+        and int(item.get("size") or 0) == source_file.stat().st_size
+        and str(item.get("etag") or "") == source_etag
+    ]
+    if len(index_matches) != 1:
+        raise RuntimeError(
+            "source_download_receipt_invalid: source is not uniquely proven by the index."
+        )
+    receipt["_verified_index_path"] = str(index_path.resolve())
 
     sharepoint_connector.configure_runtime(
         auth_mode=auth_mode, binding_path=binding_path
     )
-    metadata = sharepoint_connector._get_item(
-        f"/recon-upload-space/{provider}/{source_name}"
-    )
+    metadata = sharepoint_connector._get_item(source_path)
     expected_source_path = (
         unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
-        + f"/recon-upload-space/{provider}/{source_name}"
+        + source_path
     )
     metadata_url = str(metadata.get("webUrl") or "")
     metadata_path = unquote(urlparse(metadata_url).path)
@@ -203,12 +272,16 @@ def _verify_download_receipt(
         != binding["drive_id"]
         or metadata_url != str(receipt.get("source_web_url") or "")
         or metadata_path.casefold() != expected_source_path.casefold()
+        or int(metadata.get("size") or 0) != source_file.stat().st_size
+        or str(metadata.get("eTag") or "") != source_etag
     ):
         raise RuntimeError(
             "source_download_receipt_invalid: source item identity/path does not match."
         )
     live_bytes = sharepoint_connector._graph_request(
-        "GET", f"/drives/{binding['drive_id']}/items/{item_id}/content"
+        "GET",
+        f"/drives/{binding['drive_id']}/items/{item_id}/content",
+        if_match=source_etag,
     )
     if sha256_file(source_file) != hashlib.sha256(live_bytes).hexdigest():
         raise RuntimeError(
@@ -625,6 +698,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             source_file=args.source_file.resolve(),
             provider=args.provider,
             auth_mode=getattr(args, "sharepoint_auth_mode", "auth_proxy"),
+            allowed_spaces=(
+                ("upload", "reference")
+                if args.run_mode == "parser_validation"
+                else ("upload",)
+            ),
         )
     (args.result_root / args.provider).mkdir(parents=True, exist_ok=True)
     source_checksum = sha256_file(args.source_file)
@@ -645,6 +723,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         run_manifest["sharepoint_source_item_id"] = verified_download_receipt[
             "source_item_id"
         ]
+        run_manifest["sharepoint_source_space"] = str(
+            verified_download_receipt.get("space") or "upload"
+        )
+        frozen_index_sha256 = _freeze_source_index(
+            run_root, verified_download_receipt
+        )
+        if frozen_index_sha256:
+            run_manifest["sharepoint_source_index_sha256"] = frozen_index_sha256
     if binding_argument is not None:
         binding = _freeze_sharepoint_binding(run_root, binding_argument.resolve())
         frozen_binding_path = run_root / "manifest" / "sharepoint_target_binding.json"

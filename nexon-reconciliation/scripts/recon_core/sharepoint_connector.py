@@ -8,7 +8,7 @@ import re
 import shutil
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 from urllib.request import Request, urlopen
 
 from .common import (
@@ -50,7 +50,14 @@ def _drive_id() -> str:
     )
 
 
-def _graph_request(method: str, path: str, body: dict | bytes | None = None, content_type: str = "application/json") -> bytes:
+def _graph_request(
+    method: str,
+    path: str,
+    body: dict | bytes | None = None,
+    content_type: str = "application/json",
+    *,
+    if_match: str | None = None,
+) -> bytes:
     if method != "GET" or body is not None:
         raise RuntimeError(
             "sharepoint_read_only_violation: the profile-backed connector permits GET without a request body only."
@@ -59,7 +66,13 @@ def _graph_request(method: str, path: str, body: dict | bytes | None = None, con
         raise RuntimeError(
             "sharepoint_route_violation: Graph request is outside the resolved reconciliation site/drive."
         )
+    if if_match is not None and (
+        not if_match.strip() or "\r" in if_match or "\n" in if_match
+    ):
+        raise RuntimeError("sharepoint_etag_invalid: If-Match value is invalid.")
     request = Request(f"{GRAPH_ROOT}{path}", method="GET")
+    if if_match is not None:
+        request.add_header("If-Match", if_match)
     try:
         with urlopen(request, timeout=180) as response:
             return response.read()
@@ -80,47 +93,77 @@ def _graph_json(method: str, path: str, body: dict | None = None) -> dict:
         r"/sites/[A-Za-z0-9.-]+:/sites/NexonReconciliationAutomation", path
     ):
         _RESOLUTION_SITE_ID = str(result.get("id") or "")
-    elif _BINDING is not None and "/root:" in path:
-        item_id = str(result.get("id") or "").strip()
-        if item_id:
-            _AUTHORIZED_ITEM_IDS.add(item_id)
+    elif _BINDING is not None:
+        parsed_path = urlsplit(path).path
+        if "/root:" in parsed_path:
+            item_id = str(result.get("id") or "").strip()
+            if item_id:
+                _AUTHORIZED_ITEM_IDS.add(item_id)
+        elif parsed_path.endswith("/children"):
+            for item in result.get("value", []):
+                if isinstance(item, dict):
+                    item_id = str(item.get("id") or "").strip()
+                    if item_id:
+                        _AUTHORIZED_ITEM_IDS.add(item_id)
     return result
 
 
 def _graph_path_allowed(path: str) -> bool:
-    if "?" in path or "#" in path:
+    parsed = urlsplit(path)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
         return False
+    clean_path = parsed.path
     if _BINDING is None:
         if re.fullmatch(
             r"/sites/[A-Za-z0-9.-]+\.sharepoint\.com:/sites/NexonReconciliationAutomation",
-            path,
+            clean_path,
         ):
-            return True
+            return not parsed.query
         return bool(
             _RESOLUTION_SITE_ID
-            and path == f"/sites/{quote(_RESOLUTION_SITE_ID, safe='')}/drive"
+            and clean_path == f"/sites/{quote(_RESOLUTION_SITE_ID, safe='')}/drive"
+            and not parsed.query
         )
 
     site_id = str(_BINDING["site_id"])
     drive_id = str(_BINDING["drive_id"])
-    if path in {f"/sites/{site_id}", f"/drives/{drive_id}"}:
-        return True
+    if clean_path in {f"/sites/{site_id}", f"/drives/{drive_id}"}:
+        return not parsed.query
     root_prefix = f"/drives/{drive_id}/root:"
-    if path.startswith(root_prefix) and path.endswith(":"):
+    if clean_path.startswith(root_prefix) and clean_path.endswith(":"):
+        if parsed.query:
+            return False
         try:
-            drive_path = _safe_drive_path(path[len(root_prefix) : -1])
+            drive_path = _safe_drive_path(clean_path[len(root_prefix) : -1])
         except RuntimeError:
             return False
-        return drive_path.startswith(
-            ("/recon-upload-space/", "/recon-result-space/")
+        approved_roots = (
+            "/recon-upload-space",
+            "/recon-reference-space",
+            "/recon-result-space",
+        )
+        return any(
+            drive_path == root or drive_path.startswith(f"{root}/")
+            for root in approved_roots
         )
     item_match = re.fullmatch(
         rf"/drives/{re.escape(drive_id)}/items/([^/]+)(?:/content)?",
-        path,
+        clean_path,
     )
-    return bool(
-        item_match and item_match.group(1) in _AUTHORIZED_ITEM_IDS
+    if item_match:
+        return bool(not parsed.query and item_match.group(1) in _AUTHORIZED_ITEM_IDS)
+    children_match = re.fullmatch(
+        rf"/drives/{re.escape(drive_id)}/items/([^/]+)/children",
+        clean_path,
     )
+    if not children_match or children_match.group(1) not in _AUTHORIZED_ITEM_IDS:
+        return False
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if not query or set(query) - {"$top", "$skiptoken"}:
+        return False
+    if any(len(values) != 1 or not values[0] for values in query.values()):
+        return False
+    return "$top" not in query or query["$top"] == ["200"]
 
 
 def _drive_path(path: str) -> str:

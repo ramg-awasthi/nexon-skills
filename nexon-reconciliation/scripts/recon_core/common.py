@@ -17,6 +17,7 @@ PROVIDER_CONFIG_KEYS = {provider.lower(): provider for provider in PROVIDERS}
 RUN_ID_RE = re.compile(r"^(AAPT|Telstra|Optus|Vocus|Megaport|Equinix)_\d{8}_\d{6}_[A-F0-9]{5}$")
 DEFAULT_CONFIG_PATH = Path("config/recon_settings.yaml")
 DEFAULT_SHAREPOINT_UPLOAD_ROOT = Path("/recon-upload-space")
+DEFAULT_SHAREPOINT_REFERENCE_ROOT = Path("/recon-reference-space")
 DEFAULT_SHAREPOINT_RESULT_ROOT = Path("/recon-result-space")
 
 AGENT_MATCH_STATUS_VALUES = {
