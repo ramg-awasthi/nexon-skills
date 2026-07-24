@@ -25,7 +25,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from recon_core import billing_query, common, core_persistence, intake_run  # noqa: E402
 from recon_core import optional_db_update, provider_api_download, record_notification  # noqa: E402
-from recon_core import run_state, safe_unpack, sharepoint_connector, write_reports  # noqa: E402
+from recon_core import run_state, safe_unpack, write_reports  # noqa: E402
 
 
 VALID_SQL = (
@@ -977,7 +977,7 @@ class AdditionalStrictBranchEdgeTests(unittest.TestCase):
         self.assertEqual("ab", common.normalize_evidence_summary("abcd", 2))
         self.assertEqual("abcdefg...", common.normalize_evidence_summary("abcdefghijk", 10))
 
-    def test_unpack_state_intake_sharepoint_and_provider_edges(self) -> None:
+    def test_unpack_state_intake_and_provider_edges(self) -> None:
         class FakeInfo:
             def __init__(
                 self,
@@ -1079,31 +1079,6 @@ class AdditionalStrictBranchEdgeTests(unittest.TestCase):
                     copy_source=True,
                 )
 
-            upload_root = root / "upload"
-            result_root = root / "result"
-            (upload_root / "AAPT").mkdir(parents=True)
-            (result_root / "AAPT").mkdir(parents=True)
-            local_source = upload_root / "AAPT" / "invoice.csv"
-            local_source.write_text("invoice", encoding="utf-8")
-            with patch.object(
-                sharepoint_connector,
-                "sharepoint_roots",
-                return_value=(upload_root, result_root),
-            ):
-                download_output = root / "download.json"
-                self.assertEqual(
-                    0,
-                    sharepoint_connector.download_upload(
-                        Namespace(
-                            provider="AAPT",
-                            source_name="invoice.csv",
-                            destination=root / "staged" / "invoice.csv",
-                            output=download_output,
-                            mode="local",
-                        ),
-                        config,
-                    ),
-                )
             args = Namespace(
                 account_id="ACC",
                 invoice_id="INV",

@@ -13,7 +13,53 @@ from types import SimpleNamespace
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from recon_core import provider_api_download  # noqa: E402
+from recon_core import preflight_check, provider_api_download  # noqa: E402
+
+
+def valid_mcp_receipts() -> tuple[dict, dict]:
+    capabilities = {
+        "schema_version": "1.0",
+        "kind": "capabilities",
+        "result": {
+            "status": "ok",
+            "environment": "dev",
+            "read_only": True,
+            "download_contract_version": 1,
+            "tools": sorted(preflight_check.SHAREPOINT_INTAKE_TOOLS),
+            "binary_delivery": {
+                "method": "POST",
+                "endpoint": (
+                    "https://nexon-recon-sharepoint-dev.netbird.aaic.cc/download"
+                ),
+                "ticket_header": "X-Recon-Download-Ticket",
+                "single_use": True,
+            },
+            "attestation": {
+                "algorithm": "Ed25519",
+                "public_key": "A" * 43,
+                "public_key_sha256": "a" * 64,
+            },
+            "limits": {"max_candidates": 50},
+            "providers": {
+                name: sorted(extensions)
+                for name, extensions in preflight_check.EXPECTED_PROVIDER_EXTENSIONS.items()
+            },
+        },
+    }
+    probe = {
+        "schema_version": "1.0",
+        "kind": "probe",
+        "result": {
+            "status": "ok",
+            "environment": "dev",
+            "reachable": True,
+            "site_name": "Nexon Reconciliation Automation",
+            "hostname": "tenant.sharepoint.com",
+            "path": "/sites/NexonReconciliationAutomation",
+            "spaces": ["upload", "reference", "result"],
+        },
+    }
+    return capabilities, probe
 
 
 def write_config(
@@ -26,6 +72,9 @@ def write_config(
     path.write_text(
         f"""
 timezone: Australia/Sydney
+sharepoint_intake:
+  environment: dev
+  gateway_host: nexon-recon-sharepoint-dev.netbird.aaic.cc
 features:
   provider_api_enabled: {str(provider_api_enabled).lower()}
   billing_query_enabled: false
@@ -54,20 +103,98 @@ def read_json(path: Path) -> dict:
 
 
 class PreflightIntakeAndProviderApiTests(unittest.TestCase):
-    def test_preflight_accepts_default_sharepoint_tool_mode(self) -> None:
+    def test_sharepoint_mcp_receipt_validation_rejects_contract_mutations(self) -> None:
+        capabilities, probe = valid_mcp_receipts()
+        config = {
+            "sharepoint_intake": {
+                "environment": "dev",
+                "gateway_host": (
+                    "nexon-recon-sharepoint-dev.netbird.aaic.cc"
+                ),
+            }
+        }
+        capability_mutations = [
+            [],
+            {**capabilities, "extra": True},
+            {**capabilities, "schema_version": "2.0"},
+            {**capabilities, "kind": "probe"},
+            {**capabilities, "result": []},
+            {**capabilities, "result": {**capabilities["result"], "status": "error"}},
+            {**capabilities, "result": {**capabilities["result"], "tools": []}},
+            {
+                **capabilities,
+                "result": {
+                    **capabilities["result"],
+                    "download_contract_version": 2,
+                },
+            },
+        ]
+        probe_mutations = [
+            [],
+            {**probe, "extra": True},
+            {**probe, "schema_version": "2.0"},
+            {**probe, "kind": "capabilities"},
+            {**probe, "result": []},
+            {**probe, "result": {**probe["result"], "status": "error"}},
+            {**probe, "result": {**probe["result"], "reachable": False}},
+            {**probe, "result": {**probe["result"], "site_name": ""}},
+            {**probe, "result": {**probe["result"], "hostname": ""}},
+            {**probe, "result": {**probe["result"], "path": "sites/recon"}},
+            {**probe, "result": {**probe["result"], "spaces": ["upload"]}},
+        ]
+
         with tempfile.TemporaryDirectory() as tmp:
-            config = Path(tmp) / "config.yaml"
+            root = Path(tmp)
+            capabilities_path = root / "capabilities.json"
+            probe_path = root / "probe.json"
+
+            for mutation in capability_mutations:
+                capabilities_path.write_text(json.dumps(mutation), encoding="utf-8")
+                probe_path.write_text(json.dumps(probe), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "capabilities envelope|five-tool contract"):
+                    preflight_check.validate_sharepoint_mcp_receipts(
+                        capabilities_path, probe_path, config
+                    )
+
+            for mutation in probe_mutations:
+                capabilities_path.write_text(
+                    json.dumps(capabilities), encoding="utf-8"
+                )
+                probe_path.write_text(json.dumps(mutation), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "probe envelope|required spaces"):
+                    preflight_check.validate_sharepoint_mcp_receipts(
+                        capabilities_path, probe_path, config
+                    )
+
+    def test_preflight_accepts_sharepoint_intake_mcp_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
             write_config(config)
+            capabilities = root / "capabilities.json"
+            probe = root / "probe.json"
+            capability_payload, probe_payload = valid_mcp_receipts()
+            capabilities.write_text(json.dumps(capability_payload), encoding="utf-8")
+            probe.write_text(json.dumps(probe_payload), encoding="utf-8")
 
             result = subprocess.run(
-                [sys.executable, str(SCRIPTS / "preflight_check.py"), "--config", str(config)],
+                [
+                    sys.executable,
+                    str(SCRIPTS / "preflight_check.py"),
+                    "--config",
+                    str(config),
+                    "--sharepoint-mcp-capabilities",
+                    str(capabilities),
+                    "--sharepoint-mcp-probe",
+                    str(probe),
+                ],
                 capture_output=True,
                 text=True,
                 check=False,
             )
 
         self.assertEqual(0, result.returncode, result.stderr + result.stdout)
-        self.assertIn("native SharePoint tool", result.stdout)
+        self.assertIn("SharePoint Intake MCP receipts validated", result.stdout)
 
     def test_preflight_rejects_bad_provider_api_adapter_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,20 +211,104 @@ class PreflightIntakeAndProviderApiTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Unsupported provider API adapter", result.stderr + result.stdout)
 
-    def test_preflight_local_check_reports_missing_fixed_folders(self) -> None:
+    def test_preflight_rejects_non_mapping_and_disabled_adapter_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
+            config.write_text(
+                """
+features:
+  db_update_enabled: false
+provider_api_adapters: []
+billing:
+  audit_required: true
+""".lstrip(),
+                encoding="utf-8",
+            )
+            old_argv = sys.argv
+            try:
+                sys.argv = [
+                    "preflight_check.py",
+                    "--config",
+                    str(config),
+                    "--local-check",
+                ]
+                with self.assertRaisesRegex(RuntimeError, "must be a mapping"):
+                    preflight_check.main()
+
+                write_config(config, adapters="  equinix: false\n")
+                with self.assertRaisesRegex(RuntimeError, "Remove disabled"):
+                    preflight_check.main()
+            finally:
+                sys.argv = old_argv
+
+    def test_preflight_requires_both_mcp_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "config.yaml"
             write_config(config)
+            old_argv = sys.argv
+            try:
+                sys.argv = ["preflight_check.py", "--config", str(config)]
+                with self.assertRaisesRegex(RuntimeError, "sharepoint_mcp_required"):
+                    preflight_check.main()
+            finally:
+                sys.argv = old_argv
 
-            result = subprocess.run(
-                [sys.executable, str(SCRIPTS / "preflight_check.py"), "--config", str(config), "--local-check"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+    def test_preflight_local_check_reports_missing_fixed_folders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
+            output = root / "capabilities.json"
+            write_config(config)
+            old_argv = sys.argv
+            original_roots = preflight_check.sharepoint_roots
+            try:
+                preflight_check.sharepoint_roots = lambda _config: (
+                    root / "missing-upload",
+                    root / "missing-result",
+                )
+                sys.argv = [
+                    "preflight_check.py",
+                    "--config",
+                    str(config),
+                    "--local-check",
+                    "--output",
+                    str(output),
+                ]
+                self.assertEqual(2, preflight_check.main())
+            finally:
+                preflight_check.sharepoint_roots = original_roots
+                sys.argv = old_argv
 
-        self.assertIn(result.returncode, {0, 2})
-        self.assertRegex(result.stdout, r"(Missing upload folder|Local setup validation passed)")
+            self.assertTrue(output.is_file())
+
+    def test_preflight_local_check_passes_when_all_fixed_folders_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
+            upload_root = root / "upload"
+            result_root = root / "result"
+            for provider in preflight_check.PROVIDERS:
+                (upload_root / provider).mkdir(parents=True)
+                (result_root / provider).mkdir(parents=True)
+            write_config(config)
+            old_argv = sys.argv
+            original_roots = preflight_check.sharepoint_roots
+            try:
+                preflight_check.sharepoint_roots = lambda _config: (
+                    upload_root,
+                    result_root,
+                )
+                sys.argv = [
+                    "preflight_check.py",
+                    "--config",
+                    str(config),
+                    "--local-check",
+                ]
+                self.assertEqual(0, preflight_check.main())
+            finally:
+                preflight_check.sharepoint_roots = original_roots
+                sys.argv = old_argv
 
     def test_intake_run_copy_creates_run_package_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

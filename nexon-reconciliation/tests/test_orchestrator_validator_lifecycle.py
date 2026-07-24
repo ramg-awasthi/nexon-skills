@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 from argparse import Namespace
@@ -14,33 +15,11 @@ import sys
 sys.path.insert(0, str(SCRIPTS))
 
 from recon_core import run_recon, validate_run  # noqa: E402
-from recon_core.common import RAW_WORKBOOK_COLUMNS, read_json, write_json  # noqa: E402
+from recon_core.common import RAW_WORKBOOK_COLUMNS, read_json, sha256_file, write_json  # noqa: E402
 
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "recon_settings.yaml"
-
-
-def _sharepoint_binding(root: Path) -> Path:
-    path = root / "sharepoint-target-binding.json"
-    write_json(
-        path,
-        {
-            "contract_version": 1,
-            "site_name": "Nexon Reconciliation Automation",
-            "site_id": "nexonap.sharepoint.com,site-guid,web-guid",
-            "site_url": "https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation",
-            "hostname": "nexonap.sharepoint.com",
-            "site_path": "/sites/NexonReconciliationAutomation",
-            "drive_id": "drive-id",
-            "drive_name": "Documents",
-            "drive_web_url": (
-                "https://nexonap.sharepoint.com/sites/"
-                "NexonReconciliationAutomation/Shared%20Documents"
-            ),
-            "discovery_sha256": "a" * 64,
-        },
-    )
-    return path
+TEST_ATTESTATION_KEY = "A" * 43
 
 
 def _all_capabilities() -> dict:
@@ -57,10 +36,83 @@ def _all_capabilities() -> dict:
     }
 
 
-def _download_receipt(root: Path) -> Path:
-    path = root / "download-receipt.json"
-    write_json(path, {"status": "test-fixture"})
+def _download_receipt(source: Path, *, space: str = "upload", relative_path: str | None = None) -> Path:
+    path = source.parent / f"{source.name}-{space}-download-receipt.json"
+    write_json(
+        path,
+        {
+            "contract_version": 1,
+            "status": "downloaded",
+            "environment": "dev",
+            "provider": "AAPT",
+            "space": space,
+            "source_name": source.name,
+            "local_path": str(source.resolve()),
+            "byte_count": source.stat().st_size,
+            "sha256": sha256_file(source),
+            "index": {
+                "index_id": "index-1",
+                "index_sha256": "a" * 64,
+                "relative_path": relative_path or f"AAPT/{source.name}",
+            },
+            "preparation_receipt_sha256": "b" * 64,
+            "downloaded_at": "2026-07-24T10:00:00+00:00",
+            "attestation": {},
+        },
+    )
     return path
+
+
+def _capability_receipt(root: Path) -> Path:
+    path = root / "sharepoint-capabilities.json"
+    write_json(
+        path,
+        {
+            "schema_version": "1.0",
+            "kind": "capabilities",
+            "result": {
+                "environment": "dev",
+                "attestation": {
+                    "algorithm": "Ed25519",
+                    "public_key": TEST_ATTESTATION_KEY,
+                },
+            },
+        },
+    )
+    return path
+
+
+def _database_receipts(root: Path) -> tuple[Path, Path]:
+    capabilities = root / "database-capabilities.json"
+    probe = root / "database-probe.json"
+    write_json(
+        capabilities,
+        {
+            "service": "nexon-recon-sql-mcp",
+            "environment": "dev",
+            "capabilities": {
+                "read_queries": True,
+                "core_persistence": True,
+            },
+            "query_policy": {
+                "read_only": True,
+                "schema_qualified_allowlist": True,
+                "comments_allowed": False,
+                "wildcard_projection_allowed": False,
+                "row_limit": 5000,
+                "audit_required": True,
+            },
+        },
+    )
+    write_json(
+        probe,
+        {
+            "environment": "dev",
+            "reachable": True,
+            "database_name": "test_database",
+        },
+    )
+    return capabilities, probe
 
 
 def _args(
@@ -71,8 +123,13 @@ def _args(
     resume_root: Path | None = None,
     investigation: Path | None = None,
     publication_receipt: Path | None = None,
+    publication_verification_receipt: list[Path] | None = None,
     local_only: bool = True,
 ) -> Namespace:
+    database_capabilities = None
+    database_probe = None
+    if source is not None and run_mode == "reconciliation" and not local_only:
+        database_capabilities, database_probe = _database_receipts(source.parent)
     return Namespace(
         resume_run_root=resume_root,
         config=CONFIG,
@@ -91,20 +148,105 @@ def _args(
         provider_account_id=7 if run_mode == "reconciliation" else None,
         investigation=investigation,
         publication_receipt=publication_receipt,
-        sharepoint_binding=(
-            _sharepoint_binding(source.parent)
-            if source is not None and not local_only
-            else None
-        ),
+        publication_verification_receipt=publication_verification_receipt,
         source_download_receipt=(
-            _download_receipt(source.parent)
+            _download_receipt(source)
             if source is not None and not local_only
             else None
         ),
-        sharepoint_auth_mode="auth_proxy",
+        sharepoint_mcp_capabilities=(
+            _capability_receipt(source.parent)
+            if source is not None and not local_only
+            else None
+        ),
+        database_mcp_capabilities=database_capabilities,
+        database_mcp_probe=database_probe,
+        billing_mcp_receipt=None,
+        database_persistence_receipt=None,
         local_only=local_only,
         output=None,
     )
+
+
+def _publication_receipt(run_root: Path) -> dict:
+    publication_set = read_json(run_root / "manifest" / "publication_set.json")
+    uploaded = [
+        {
+            "status": "uploaded",
+            "local_path": item["local_path"],
+            "relative_path": item["relative_path"],
+            "sha256": item["sha256"],
+        }
+        for item in publication_set["artifacts"]
+    ]
+    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+    source_name = Path(run_manifest["source_file"]).name
+    return {
+        "contract_version": 1,
+        "status": "published",
+        "run_id": run_root.name,
+        "uploaded_artifacts": uploaded,
+        "source_move_receipt": {
+            "status": "moved",
+            "source_name": source_name,
+            "relative_path": f"source/{source_name}",
+            "sha256": run_manifest["source_checksum_sha256"],
+        },
+    }
+
+
+def _publication_verification_receipts(
+    run_root: Path, output_root: Path
+) -> list[Path]:
+    publication_set = read_json(run_root / "manifest" / "publication_set.json")
+    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+    entries = [
+        (Path(item["local_path"]), item["relative_path"], item["sha256"])
+        for item in publication_set["artifacts"]
+    ]
+    source_name = Path(run_manifest["source_file"]).name
+    if run_manifest.get("intake_mode") == "manual_upload":
+        entries.append(
+            (
+                run_root / "source" / source_name,
+                f"source/{source_name}",
+                run_manifest["source_checksum_sha256"],
+            )
+        )
+    prefix = (
+        f"AAPT/{run_root.parent.parent.name}/{run_root.parent.name}/"
+        f"{run_root.name}/"
+    )
+    receipts: list[Path] = []
+    for number, (source, relative, checksum) in enumerate(entries, start=1):
+        downloaded = output_root / "publication-verification" / str(number) / source.name
+        downloaded.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, downloaded)
+        receipt = downloaded.parent / "receipt.json"
+        write_json(
+            receipt,
+            {
+                "contract_version": 1,
+                "status": "downloaded",
+                "environment": "dev",
+                "provider": "AAPT",
+                "space": "result",
+                "source_name": source.name,
+                "local_path": str(downloaded.resolve()),
+                "byte_count": downloaded.stat().st_size,
+                "sha256": checksum,
+                "index": {
+                    "index_id": f"result-index-{number}",
+                    "index_sha256": f"{number:064x}",
+                    "relative_path": f"{prefix}{relative}",
+                },
+                "preparation_receipt_sha256": "c" * 64,
+                "downloaded_at": "2026-07-24T10:00:00+00:00",
+                "attestation": {},
+            },
+        )
+        receipts.append(receipt)
+    return receipts
 
 
 def _line(run_id: str) -> dict:
@@ -223,6 +365,89 @@ class RuntimeHarness:
         )
 
 
+def _fleet_plan(*, normalized: dict, environment: str, **_: object) -> dict:
+    return {
+        "contract_version": 1,
+        "environment": environment,
+        "run_id": normalized["lines"][0]["run_id"],
+        "provider": "AAPT",
+        "sql_source": "test",
+        "base_sql_sha256": "a" * 64,
+        "requests": [{"chunk_id": 1}],
+    }
+
+
+def _finish_fleet_database_handoffs(
+    result: dict,
+    *,
+    matched: bool,
+    config: Path = CONFIG,
+) -> dict:
+    run_root = Path(result["run_root"])
+    billing_receipt = run_root.parent / "billing-mcp-receipt.json"
+    write_json(billing_receipt, {"test": True})
+    candidates = [_candidate()] if matched else []
+    with patch.object(
+        run_recon,
+        "consume_billing_query_receipts",
+        return_value=(
+            {
+                "run_id": run_root.name,
+                "provider": "AAPT",
+                "candidates_by_line": {"line-1": candidates},
+            },
+            [{"chunk_id": 1, "row_count": len(candidates)}],
+        ),
+    ):
+        persistence_pause = run_recon.run(
+            Namespace(
+                **{
+                    **vars(
+                        _args(
+                            resume_root=run_root,
+                            local_only=False,
+                        )
+                    ),
+                    "config": config,
+                    "billing_mcp_receipt": [billing_receipt],
+                }
+            )
+        )
+    request = read_json(Path(persistence_pause["database_persistence_request"]))
+    rows = read_json(run_root / "normalized" / "match_results.json")["rows"]
+    for row in rows:
+        row["AccountPayableReconRequestId"] = 11
+        row["GenericSupplierInvoiceLineItemId"] = 22
+    persistence_receipt = run_root.parent / "persistence-mcp-receipt.json"
+    write_json(
+        persistence_receipt,
+        {
+            "environment": "dev",
+            "run_id": run_root.name,
+            "payload_sha256": request["payload_sha256"],
+            "persisted": {"rows": rows},
+            "manifest": {
+                "run_id": run_root.name,
+                "provider": "AAPT",
+                "transaction": "committed",
+                "request_count": 1,
+                "invoice_count": 1,
+                "supplier_line_count": len(rows),
+                "result_count": len(rows),
+            },
+        },
+    )
+    return run_recon.run(
+        Namespace(
+            **{
+                **vars(_args(resume_root=run_root, local_only=False)),
+                "config": config,
+                "database_persistence_receipt": persistence_receipt,
+            }
+        )
+    )
+
+
 class OrchestratorValidatorLifecycleTests(unittest.TestCase):
     def _new_run(
         self,
@@ -255,9 +480,10 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
             patch.object(
                 run_recon,
                 "_verify_download_receipt",
-                return_value={"source_item_id": "source-item"},
+                side_effect=lambda **kwargs: read_json(kwargs["receipt_path"]),
             ),
             patch.object(run_recon, "_run_command", side_effect=harness.command),
+            patch.object(run_recon, "prepare_billing_query_plan", side_effect=_fleet_plan),
             persistence,
             patch.dict(
                 os.environ,
@@ -269,6 +495,8 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
             ),
         ):
             result = run_recon.run(args)
+        if not local_only and run_mode == "reconciliation":
+            result = _finish_fleet_database_handoffs(result, matched=matched)
         return result, Path(result["run_root"])
 
     def _resume(
@@ -277,14 +505,20 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
         *,
         investigation: Path | None = None,
         publication_receipt: Path | None = None,
+        publication_verification_receipt: list[Path] | None = None,
         local_only: bool,
     ) -> dict:
-        with patch.object(run_recon, "_verify_published_item"):
+        with patch.object(
+            run_recon,
+            "_verify_download_receipt",
+            side_effect=lambda **kwargs: read_json(kwargs["receipt_path"]),
+        ):
             return run_recon.run(
                 _args(
                     resume_root=run_root,
                     investigation=investigation,
                     publication_receipt=publication_receipt,
+                    publication_verification_receipt=publication_verification_receipt,
                     local_only=local_only,
                 )
             )
@@ -434,46 +668,15 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
                     for item in publication_set["artifacts"]
                 )
             )
-            run_prefix = (
-                f"/recon-result-space/AAPT/{run_root.parent.parent.name}/"
-                f"{run_root.parent.name}/{run_root.name}/"
-            )
-            uploaded = [
-                {
-                    "local_path": item["local_path"],
-                    "sha256": item["sha256"],
-                    "item_id": f"item-{index}",
-                    "sharepoint_url": (
-                        "https://nexonap.sharepoint.com/sites/"
-                        "NexonReconciliationAutomation/Shared%20Documents"
-                        f"{run_prefix}{item['relative_path']}"
-                    ),
-                }
-                for index, item in enumerate(publication_set["artifacts"], start=1)
-            ]
-            run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
-            source_name = Path(run_manifest["source_file"]).name
             receipt = Path(tmp) / "publication-receipt.json"
-            write_json(
-                receipt,
-                {
-                    "run_id": run_root.name,
-                    "uploaded_artifacts": uploaded,
-                    "source_move_receipt": {
-                        "status": "moved",
-                        "item_id": "source-item",
-                        "sha256": run_manifest["source_checksum_sha256"],
-                        "sharepoint_url": (
-                            "https://nexonap.sharepoint.com/sites/"
-                            "NexonReconciliationAutomation/Shared%20Documents"
-                            f"{run_prefix}source/{source_name}"
-                        ),
-                    },
-                },
+            write_json(receipt, _publication_receipt(run_root))
+            verification_receipts = _publication_verification_receipts(
+                run_root, Path(tmp)
             )
             resumed = self._resume(
                 run_root,
                 publication_receipt=receipt,
+                publication_verification_receipt=verification_receipts,
                 local_only=False,
             )
             self.assertEqual("completed", resumed["run_status"])

@@ -1,58 +1,51 @@
 ---
 name: nexon-reconciliation
-description: Run or validate Nexon telco invoice reconciliation for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using the dedicated SharePoint site, deterministic provider parsers, audited read-only billing queries, transactional persistence, current-contract XLSX reports, and bounded exception investigation. Use for manual-upload or approved provider-API intake, parser validation, reconciliation execution, run resumption, publication, and controlled failure handling.
+description: Run or validate Nexon telco invoice reconciliation for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using SharePoint Intake MCP source discovery and binary staging, native SharePoint writes, deterministic provider parsers, audited billing queries, transactional persistence, current-contract XLSX reports, and bounded exception investigation.
 ---
 
 # Nexon Reconciliation
 
-Use this skill for the shared reconciliation lifecycle. Use `nexon-telco-parsers` for deterministic invoice extraction.
+Use this skill for the shared reconciliation lifecycle. Use
+`nexon-telco-parsers` for deterministic invoice extraction.
 
 `nexon-recon-agent` owns orchestration and tool routing. `run_recon.py` owns
-deterministic execution and durable lifecycle state. The agent hands unresolved
-rows only to `nexon-recon-exception-investigator`.
+deterministic execution and durable lifecycle state. Send only unresolved rows
+to `nexon-recon-exception-investigator`.
 
 ## Safety Rules
 
-- Use only the `Nexon Reconciliation Automation` SharePoint site at
-  `/sites/NexonReconciliationAutomation` and its resolver-validated default
-  document library.
-- Use native SharePoint tools for site discovery, cloud move/copy, and uploads.
-  Do not browse or select source files manually. The deterministic SharePoint
-  file index owns source discovery and exact selection. Capture tool-returned
-  item URLs for cloud-action receipts; do not create share links.
-- Use the approved binary-capable connector for ZIP, PDF, XLSX, and other binary downloads.
+- Use only the configured `Nexon Reconciliation Automation` SharePoint site.
+- Use SharePoint Intake MCP for read-only source discovery, exact selection,
+  binary preparation, and post-publication re-download verification.
+- The only SharePoint Intake MCP tools are
+  `recon_sp_get_capabilities`, `recon_sp_probe`,
+  `recon_sp_index_sources`, `recon_sp_prepare_download`, and
+  `recon_sp_prepare_reference_test`.
+- Use native SharePoint tools only for controlled source moves and result
+  uploads. Do not use native text-file reads for binary content.
+- Never expose a private download key or decrypted one-time ticket in a URL,
+  query string, CLI argument, output, exception, report, log, or durable
+  receipt.
 - Never parse invoices with model reasoning or invent rows.
 - Never use parser-only output as a customer reconciliation result.
 - Never let an agent write directly to a database.
-- Keep accepted-resolution updates separate from required core reconciliation persistence.
+- Use Nexon Recon SQL MCP for every Fleet database read or lifecycle write.
+- Keep DSNs and direct database adapters confined to `--local-only` tests.
 - Keep `db_update_enabled=false` without a controlled approval artifact.
-- Keep credentials and customer query values out of prompts, reports, manifests, and logs.
+- Keep credentials out of prompts and artifacts. Customer query values may
+  exist only in the transient frozen MCP request; dispose it after successful
+  resume and retain only hashes and sanitized logs.
 
-## Fixed Storage Contract
+## Storage Contract
 
 ```text
 Site: Nexon Reconciliation Automation
-Path: /sites/NexonReconciliationAutomation
-Library: the site's default document library
 Upload: /recon-upload-space/<provider>/
 Reference: /recon-reference-space/<provider>/
 Result: /recon-result-space/<provider>/<yyyy>/<MM>/<run_id>/
 ```
 
-Resolve the physical target before every run. Save the unchanged native SharePoint
-`List Sites` result, then run:
-
-```text
-python skills/nexon-reconciliation/scripts/resolve_sharepoint_target.py \
-  --sites-file <sharepoint_sites.json> \
-  --auth-mode auth_proxy \
-  --output <sharepoint_target_binding.json>
-```
-
-The resolver accepts exactly one match for the fixed site name and path, validates
-that the active access profile can read that site and its default document
-library, and emits the only permitted site/drive binding. Never hand-author or
-edit this binding.
+Do not create missing SharePoint roots or provider folders during a run.
 
 Run ID:
 
@@ -60,73 +53,89 @@ Run ID:
 <provider_slug>_<yyyyMMdd_HHmmss>_<hash5>
 ```
 
-## Source Intake
+## Intake Contract
 
-Branch on intake mode first. For `provider_api`, require the approved adapter
-and run `provider_api_download.py`; do not index SharePoint. For
-`manual_upload`, call one deterministic `stage` operation. It indexes the
-complete approved source space, applies only explicit user constraints, and
-automatically downloads when exactly one candidate remains:
+For `provider_api`, use the approved provider adapter and provenance manifest.
+Do not call SharePoint Intake MCP.
+
+For `manual_upload`:
+
+1. Call `recon_sp_get_capabilities` and `recon_sp_probe`.
+2. Call `recon_sp_index_sources` for `upload`, or `reference` only for an
+   explicit `parser_validation` test.
+3. Apply only explicit provider, filename, selection, or all-file constraints.
+4. Stop on no match. Ask the user to select when multiple sanitized candidates
+   remain. Do not rank candidates.
+5. Run `create_intake_download_key.py` to create a new private key and safe
+   public-key request. Pass only `recipient_public_key` to
+   `recon_sp_prepare_download`. For a reference fixture, call
+   `recon_sp_prepare_reference_test` directly with the provider, optional exact
+   source name, and public key; it replaces separate index and prepare calls.
+6. Require the unchanged
+   `{schema_version: "1.0", kind: "prepared_download", result: ...}` envelope.
+   Save it to a permission-restricted temporary file without displaying or
+   transforming it. Never read or expose the private key.
+7. Immediately run:
 
 ```text
-python skills/nexon-reconciliation/scripts/sharepoint_file_index.py \
+python skills/nexon-reconciliation/scripts/create_intake_download_key.py \
+  --private-key <temporary_private_key.pem> \
+  --output <public_key_request.json>
+
+python skills/nexon-reconciliation/scripts/fetch_intake_artifact.py \
   --config skills/nexon-reconciliation/config/recon_settings.yaml \
-  --binding <sharepoint_target_binding.json> \
-  --auth-mode auth_proxy \
-  stage \
-  --space <upload|reference> \
-  [--provider <provider>] \
-  [--source-name <exact_source_name>] \
-  [--all] \
-  --index <sharepoint_file_index.json> \
-  --destination <staged_file> \
-  --receipt <download_receipt.json> \
-  --output <stage_result.json>
+  --preparation <temporary_preparation.json> \
+  --private-key <temporary_private_key.pem> \
+  --destination <staged_path>/<source_name> \
+  --output <download_receipt.json>
 ```
 
-Read only the sanitized `stage_result.json`:
+The fetcher accepts no URL or ticket CLI argument. It requires the unchanged
+version 1.0 `prepared_download` envelope whose result has `status=prepared`,
+an exact approved HTTPS `/download` endpoint, provider,
+environment, space, filename, expected size and SHA-256, expiry, sanitized
+index identity, encrypted one-time ticket, and attestation key. It decrypts
+locally, deletes the private key and preparation before redemption, refuses
+redirects, sends the ticket only in `X-Recon-Download-Ticket`, verifies the
+Ed25519 download attestation, and emits a version 1 `status=downloaded`
+sanitized signed receipt.
 
-- `staged`: pass the known receipt path to `run_recon.py`.
-- `source_not_found`: stop.
-- `selection_required`: ask the user to select one sanitized candidate, then
-  rerun `stage` with `--selection-id`, the returned
-  `--expected-index-sha256`, and the unchanged index.
-- `selection_limit_exceeded`: ask the user to narrow by provider or exact
-  filename; do not rank or display a partial candidate list.
-- `batch_plan_ready`: process one selection at a time and only when the user
-  explicitly requested all matching uploads.
+The MCP preparation tool must fully spool and hash-attest the source bytes
+before issuing the encrypted one-time ticket. Any failed fetch requires a fresh
+key and preparation. MCP code owns provider file eligibility. Only sanitized
+candidates from the approved provider roots may be selected, and user-facing
+candidate and batch results are limited to 50 entries.
 
-`upload` is the normal manual-intake space. `reference` is allowed only when
-`run_mode=parser_validation` for an explicit non-production fixture test. Both
-SharePoint spaces use the same indexing, identity validation, binary download,
-checksum, and receipt mechanism. If the active access profile changes, discard
-both the target binding and index and resolve them again.
+## Capability Gate
 
-Never browse provider folders or ask the model to inspect the raw index.
-Candidate choices never expose Graph identity. After staging, the stage result's
-machine-use source item ID may be passed verbatim only to the native SharePoint
-move; do not present it to the user or use it for selection. The opaque
-selection ID is only a lookup handle, and the script revalidates the hidden
-identity before download.
+Save the unchanged `{schema_version: "1.0", kind, result}` outputs from
+`recon_sp_get_capabilities` and `recon_sp_probe`, then run:
 
-Candidate eligibility follows the parser contracts: AAPT ZIP;
-Telstra/Vocus/Megaport CSV or ZIP; Optus PDF, DAT, or ZIP; Equinix XLSX or ZIP.
-Only the six approved provider roots are traversed, and user-facing candidate
-and batch results are limited to 50 entries.
+```text
+python skills/nexon-reconciliation/scripts/preflight_check.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
+  --sharepoint-mcp-capabilities <capabilities_receipt.json> \
+  --sharepoint-mcp-probe <probe_receipt.json> \
+  --output <runtime_capabilities.json>
+```
 
-- `parser_validation` always copies locally and leaves the cloud source unchanged.
-- `manual_upload` reconciliation always uses `upload` and moves the cloud source
-  into the run `source/` folder only after binary staging succeeds and the run
-  ID exists.
-- `provider_api` reconciliation does not perform a SharePoint source move.
+For `parser_validation`, require binary source staging, archive validation,
+and provider parsing. For `reconciliation`, also require core supplier
+persistence, request-scoped billing preparation, deterministic comparison,
+core result persistence, and current workbook generation.
 
-Do not create missing SharePoint root/provider folders during a run.
+Stop with `core_reconciliation_not_available` when a required capability is
+false. Do not downgrade reconciliation into parser validation.
+
+For reconciliation, also save unchanged results from
+`recon_db_get_capabilities` and `recon_db_probe`. Require the configured
+environment, read-only query policy, schema-qualified allowlist, no comments,
+no wildcard projection, audit, sufficient row limit, reachability, and core
+persistence when enabled.
 
 ## Runtime Entry Point
 
-Use `python skills/nexon-reconciliation/scripts/run_recon.py ...`. Do not manually reproduce its stage sequence when the state machine is available.
-
-Parser validation:
+Parser validation is copy-first:
 
 ```text
 python skills/nexon-reconciliation/scripts/run_recon.py \
@@ -136,9 +145,8 @@ python skills/nexon-reconciliation/scripts/run_recon.py \
   --result-root <local_result_root> \
   --run-mode parser_validation \
   --intake-mode manual_upload \
-  --sharepoint-binding <sharepoint_target_binding.json> \
   --source-download-receipt <download_receipt.json> \
-  --sharepoint-auth-mode auth_proxy \
+  --sharepoint-mcp-capabilities <capabilities_receipt.json> \
   --copy \
   --output <result.json>
 ```
@@ -156,70 +164,110 @@ python skills/nexon-reconciliation/scripts/run_recon.py \
   --billing-period <period> \
   --billing-sql-file <billing_query.sql> \
   --provider-account-id <id> \
-  --sharepoint-binding <sharepoint_target_binding.json> \
-  --sharepoint-auth-mode auth_proxy \
+  --source-download-receipt <download_receipt.json> \
+  --sharepoint-mcp-capabilities <capabilities_receipt.json> \
+  --database-mcp-capabilities <database_capabilities.json> \
+  --database-mcp-probe <database_probe.json> \
   --output <result.json>
 ```
 
-Add `--source-download-receipt <download_receipt.json>` for `manual_upload`.
-Provider API intake uses its provider provenance manifest instead.
+Omit `--source-download-receipt` for provider API intake and pass its approved
+source identity, account/document identifiers, and provenance manifest.
 
-The command fails closed with `core_reconciliation_not_available` unless its capability manifest enables every required stage.
+`run_recon.py` verifies only the local receipt contract, local path, byte
+count, checksum, provider, space, filename, and sanitized index identity. It
+does not call SharePoint or Graph.
 
 ## Pause And Resume
 
-For `awaiting_exception_investigation`, resume the same run:
+For `awaiting_billing_query`, call `recon_db_read_query` exactly once per
+frozen request in `billing_mcp_plan`. Save each unchanged response in chunk
+order and resume the same run:
 
 ```text
 python skills/nexon-reconciliation/scripts/run_recon.py \
   --config skills/nexon-reconciliation/config/recon_settings.yaml \
   --resume-run-root <run_root> \
-  --investigation <exception_investigation.json> \
-  --billing-period <period> \
+  --billing-mcp-receipt <chunk_1.json> \
+  --billing-mcp-receipt <chunk_2.json> \
   --output <result.json>
 ```
 
-For `awaiting_publication`, upload every listed artifact to the exact SharePoint run folder, then resume:
+On successful resume, delete the temporary receipts. The runtime deletes the
+frozen request and preserves only hashes and the sanitized query log.
+
+For `awaiting_core_persistence`, call `recon_db_persist_run` once with the
+exact frozen `database_persistence_request`, excluding only
+`contract_version`. Save the unchanged response and resume:
+
+```text
+python skills/nexon-reconciliation/scripts/run_recon.py \
+  --config skills/nexon-reconciliation/config/recon_settings.yaml \
+  --resume-run-root <run_root> \
+  --database-persistence-receipt <persistence_receipt.json> \
+  --output <result.json>
+```
+
+On successful resume, delete the temporary receipt. The runtime deletes the
+frozen request and preserves only hashes and committed persistence artifacts.
+
+For `awaiting_exception_investigation`, resume the same run with
+`--investigation <exception_investigation.json>`.
+
+For `awaiting_publication`:
+
+1. Use native SharePoint upload operations for every frozen artifact.
+2. For manual upload, use the exact indexed provider/source path to move the
+   source into the run `source/` folder. Parser validation never moves it.
+3. Create a sanitized native publication receipt containing only run identity,
+   local and relative paths, checksums, upload statuses, and the source move
+   status when applicable.
+4. Index the exact result run folder with `recon_sp_index_sources`.
+5. Create a fresh ephemeral key, then use `recon_sp_prepare_download` and
+   `fetch_intake_artifact.py` to re-download every published artifact,
+   including the moved manual source.
+6. Resume with the native receipt and every sanitized verification receipt:
 
 ```text
 python skills/nexon-reconciliation/scripts/run_recon.py \
   --config skills/nexon-reconciliation/config/recon_settings.yaml \
   --resume-run-root <run_root> \
   --publication-receipt <publication_receipt.json> \
+  --publication-verification-receipt <downloaded_artifact_receipt.json> \
+  --publication-verification-receipt <next_receipt.json> \
   --output <result.json>
 ```
 
-Never create a second run for either resume operation.
+The same MCP index/prepare contract verifies publication; there is no separate
+publication tool. Never create a second run for a resume operation.
 
-## Status Boundaries
+## Result And Query Boundaries
 
-The raw workbook uses current `ReconMatchStatus`: `Matched`, `Not Matched`, `Supplier Only`, `Billing System Only`, `Dispute`, `Manual Matched`, `Billing Initiated`, or `Service Cancelled`.
+The raw XLSX preserves the current 35-column workbook contract. The refined
+XLSX preserves every raw column and adds only approved agent and human fields.
+Do not emit `agent_confidence_score`, `agent_reason_code`, or `agent_notes`.
 
-Agent statuses exist only in the refined workbook. The investigator may return `suggested_match`, `needs_review`, `multi_match`, `no_match`, `parser_warning`, or `excluded`. Only deterministic matching may assign `auto_matched`.
-
-## Workbook Contract
-
-The raw output is XLSX with `Result`, `Adjustment`, and `Do not change`. `Result` follows the exact current 35-column contract in order.
-
-The refined XLSX preserves all raw columns and appends only the approved agent and human fields. It excludes `agent_confidence_score`, `agent_reason_code`, and `agent_notes`.
-
-If there are no unresolved rows, skip exception investigation and refined-workbook generation.
-
-## Query Boundary
-
-Agent-selected SQL is allowed for initial request-scoped billing preparation and bounded exception investigation only through `billing_query.py`.
-
-Require one schema-qualified `SELECT`/`WITH`, approved tables and columns, canonical candidate projections, read-only credentials, timeout, row cap, query chunks, and a sanitized query log. The tool applies provider/account/period/service filters outside the supplied query. Reject `SELECT INTO`. Additional-evidence queries must provide the original exception input, an unresolved line-ID subset, and the configured sequential query-round budget. Query groups, never one row at a time. `billing.audit_required` must remain true.
+Run agent-selected SQL in Fleet only through `recon_db_read_query`. Require one
+schema-qualified `SELECT` or `WITH`, approved tables/columns, canonical
+candidate projections, read-only policy, timeout, row cap, query chunks, and a
+sanitized query log. Reject `SELECT INTO`. Query groups, never one row at a
+time. `billing.audit_required` must remain true. `billing_query.py` and direct
+DSN persistence are available only for `--local-only` tests.
 
 ## Audit And Failures
 
-Every run requires `run_manifest.json`, `run_state.json`, `audit_manifest.json`, parser artifacts, applicable persistence/query/report manifests, and a publication receipt for Fleet publication.
+Every run requires durable run, state, audit, parser, and applicable
+persistence/query/report manifests. Fleet publication additionally requires a
+sanitized native publication receipt and complete MCP re-download receipts.
 
-Failure manifests identify run/correlation ID, failed stage, failure code, retryability, and sanitized detail. Retry only explicitly retryable and idempotent stages.
+Failure manifests contain only run/correlation identity, failed stage, failure
+code, retryability, and sanitized detail. Retry only explicitly retryable and
+idempotent stages. Outlook notifications are text only and contain no
+attachments.
 
 ## Runtime References
 
 - `references/operating_contract.md` for states, artifacts, and failure codes.
-- `references/access_and_secrets.md` for connector and secret boundaries.
-- `references/billing_query_contract.md` before preparing or executing billing SQL.
+- `references/access_and_secrets.md` for tool and secret boundaries.
+- `references/billing_query_contract.md` before executing billing SQL.
 - `../nexon-telco-parsers/SKILL.md` for parser contracts.

@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
 
 from .common import (
     DEFAULT_CONFIG_PATH,
@@ -23,17 +20,50 @@ from .common import (
     write_json,
 )
 from .core_persistence import persist_shadow_run
+from .db_mcp_handoff import (
+    consume_billing_query_receipts,
+    consume_persistence_receipt,
+    prepare_billing_query_plan,
+    prepare_persistence_request,
+    validate_database_mcp,
+    write_billing_outputs,
+)
+from .fetch_intake_artifact import verify_receipt_attestation
 from .intake_run import create_run
 from .match_recon import classify_line
 from .preflight_check import capability_manifest
 from .run_state import create_state, finalize_state, update_stage
 from .safe_unpack import extract_zip
-from .sharepoint_binding import load_binding
-from . import sharepoint_connector
-from .sharepoint_file_index import load_index
 from .sqlserver_persistence import persist_sqlserver_run
 from .validate_run import validate_run
 from .write_reports import write_reports
+
+
+DOWNLOAD_RECEIPT_FIELDS = {
+    "contract_version",
+    "status",
+    "environment",
+    "provider",
+    "space",
+    "source_name",
+    "local_path",
+    "byte_count",
+    "sha256",
+    "index",
+    "preparation_receipt_sha256",
+    "downloaded_at",
+    "attestation",
+}
+DOWNLOAD_INDEX_FIELDS = {"index_id", "index_sha256", "relative_path"}
+PUBLICATION_RECEIPT_FIELDS = {
+    "contract_version",
+    "status",
+    "run_id",
+    "uploaded_artifacts",
+    "source_move_receipt",
+}
+PUBLISHED_ARTIFACT_FIELDS = {"status", "local_path", "relative_path", "sha256"}
+SOURCE_MOVE_FIELDS = {"status", "source_name", "relative_path", "sha256"}
 
 
 def _run_command(command: list[str]) -> None:
@@ -98,6 +128,7 @@ def _parser_command(
     config_path: Path,
     provider: str,
     run_root: Path,
+    input_dir: Path,
 ) -> list[str]:
     return [
         sys.executable,
@@ -107,7 +138,7 @@ def _parser_command(
         "--provider",
         provider,
         "--input-dir",
-        str(run_root / "source"),
+        str(input_dir),
         "--output",
         str(run_root / "normalized" / "provider_lines.json"),
         "--warnings",
@@ -146,197 +177,122 @@ def _logical_run_path(provider: str, run_root: Path) -> str:
     return logical_sharepoint_run_path(provider, run_root)
 
 
-def _freeze_sharepoint_binding(
-    run_root: Path, binding_path: Path
-) -> dict[str, Any]:
-    binding = load_binding(binding_path)
-    frozen_path = run_root / "manifest" / "sharepoint_target_binding.json"
-    write_json(frozen_path, binding)
-    return binding
-
-
-def _freeze_source_index(
-    run_root: Path, receipt: dict[str, Any]
-) -> str | None:
-    verified_index_path = receipt.get("_verified_index_path")
-    if not verified_index_path:
-        return None
-    frozen_index_path = run_root / "manifest" / "sharepoint_file_index.json"
-    shutil.copy2(verified_index_path, frozen_index_path)
-    frozen_index_sha256 = sha256_file(frozen_index_path)
-    if frozen_index_sha256 != receipt["index_sha256"]:
-        raise RuntimeError(
-            "source_download_receipt_invalid: frozen source index checksum changed."
-        )
-    return frozen_index_sha256
-
-
 def _verify_download_receipt(
     *,
     receipt_path: Path,
-    binding_path: Path,
-    source_file: Path,
     provider: str,
-    auth_mode: str,
-    allowed_spaces: tuple[str, ...] = ("upload",),
+    allowed_spaces: tuple[str, ...],
+    expected_file: Path | None = None,
+    expected_relative_path: str | None = None,
+    expected_environment: str | None = None,
+    expected_attestation_public_key: str | None = None,
+    forbidden_root: Path | None = None,
 ) -> dict[str, Any]:
-    binding = load_binding(binding_path)
     receipt = read_json(receipt_path)
-    source_name = source_file.name
-    expected = {
-        "status": "downloaded",
-        "provider": provider,
-        "source_name": source_name,
-        "destination": str(source_file.resolve()),
-        "site_id": binding["site_id"],
-        "drive_id": binding["drive_id"],
-        "binding_sha256": sha256_file(binding_path),
-        "byte_count": source_file.stat().st_size,
-        "downloaded_sha256": sha256_file(source_file),
-    }
-    if any(receipt.get(key) != value for key, value in expected.items()):
+    if not isinstance(receipt, dict) or set(receipt) != DOWNLOAD_RECEIPT_FIELDS:
         raise RuntimeError(
-            "source_download_receipt_invalid: staged source provenance does not match."
+            "download_receipt_invalid: receipt fields do not match the contract."
         )
-    item_id = str(receipt.get("source_item_id") or "").strip()
-    if not item_id:
-        raise RuntimeError(
-            "source_download_receipt_invalid: source_item_id is required."
-        )
-    source_space = str(receipt.get("space") or "").strip().lower()
-    if source_space not in allowed_spaces:
-        raise RuntimeError(
-            "source_download_receipt_invalid: source space is not allowed for this run."
-        )
-    source_path = str(receipt.get("source_path") or "")
-    source_path = sharepoint_connector._safe_drive_path(source_path)
-    provider_root = f"/recon-{source_space}-space/{provider}/"
     if (
-        not source_path.startswith(provider_root)
-        or Path(source_path).name != source_name
+        receipt.get("contract_version") != 1
+        or receipt.get("status") != "downloaded"
+        or (
+            expected_environment is not None
+            and receipt.get("environment") != expected_environment
+        )
+        or receipt.get("provider") != provider
+        or receipt.get("space") not in allowed_spaces
     ):
         raise RuntimeError(
-            "source_download_receipt_invalid: source path is outside the provider space."
+            "download_receipt_invalid: version, status, provider, or space does not match."
         )
-    index_path_value = str(receipt.get("index_path") or "").strip()
-    index_sha256 = str(receipt.get("index_sha256") or "").strip()
-    source_etag = str(receipt.get("source_etag") or "").strip()
-    if not index_path_value or not index_sha256 or not source_etag:
-        raise RuntimeError(
-            "source_download_receipt_invalid: indexed source provenance is incomplete."
-        )
-    index_path = Path(index_path_value)
-    if not index_path.is_file() or sha256_file(index_path) != index_sha256:
-        raise RuntimeError(
-            "source_download_receipt_invalid: source index is missing or changed."
-        )
-    index = load_index(index_path)
+    local_path = Path(str(receipt.get("local_path") or "")).resolve()
+    source_name = str(receipt.get("source_name") or "")
     if (
-        index.get("space") != source_space
-        or index.get("site_id") != binding["site_id"]
-        or index.get("drive_id") != binding["drive_id"]
-        or index.get("binding_sha256") != sha256_file(binding_path)
+        not local_path.is_file()
+        or local_path.name != source_name
+        or (expected_file is not None and local_path != expected_file.resolve())
     ):
         raise RuntimeError(
-            "source_download_receipt_invalid: source index binding does not match."
+            "download_receipt_invalid: local artifact identity does not match."
         )
-    index_matches = [
-        item
-        for item in index["files"]
-        if item.get("provider") == provider
-        and item.get("name") == source_name
-        and item.get("sharepoint_path") == source_path
-        and item.get("item_id") == item_id
-        and int(item.get("size") or 0) == source_file.stat().st_size
-        and str(item.get("etag") or "") == source_etag
-    ]
-    if len(index_matches) != 1:
-        raise RuntimeError(
-            "source_download_receipt_invalid: source is not uniquely proven by the index."
-        )
-    receipt["_verified_index_path"] = str(index_path.resolve())
-
-    sharepoint_connector.configure_runtime(
-        auth_mode=auth_mode, binding_path=binding_path
-    )
-    metadata = sharepoint_connector._get_item(source_path)
-    expected_source_path = (
-        unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
-        + source_path
-    )
-    metadata_url = str(metadata.get("webUrl") or "")
-    metadata_path = unquote(urlparse(metadata_url).path)
-    if (
-        str(metadata.get("id") or "") != item_id
-        or str(metadata.get("parentReference", {}).get("driveId") or "")
-        != binding["drive_id"]
-        or metadata_url != str(receipt.get("source_web_url") or "")
-        or metadata_path.casefold() != expected_source_path.casefold()
-        or int(metadata.get("size") or 0) != source_file.stat().st_size
-        or str(metadata.get("eTag") or "") != source_etag
+    if forbidden_root is not None and local_path.is_relative_to(
+        forbidden_root.resolve()
     ):
         raise RuntimeError(
-            "source_download_receipt_invalid: source item identity/path does not match."
+            "download_receipt_invalid: verification download must be outside the run folder."
         )
-    live_bytes = sharepoint_connector._graph_request(
-        "GET",
-        f"/drives/{binding['drive_id']}/items/{item_id}/content",
-        if_match=source_etag,
-    )
-    if sha256_file(source_file) != hashlib.sha256(live_bytes).hexdigest():
+    checksum = sha256_file(local_path)
+    if (
+        receipt.get("byte_count") != local_path.stat().st_size
+        or receipt.get("sha256") != checksum
+    ):
         raise RuntimeError(
-            "source_download_receipt_invalid: staged bytes do not match the bound SharePoint item."
+            "download_receipt_invalid: local size or checksum does not match."
         )
+    index = receipt.get("index")
+    if (
+        not isinstance(index, dict)
+        or set(index) != DOWNLOAD_INDEX_FIELDS
+        or not str(index.get("index_id") or "").strip()
+        or len(str(index.get("index_sha256") or "")) != 64
+        or not str(index.get("relative_path") or "").strip()
+    ):
+        raise RuntimeError(
+            "download_receipt_invalid: sanitized index identity is incomplete."
+        )
+    if (
+        expected_relative_path is not None
+        and index.get("relative_path") != expected_relative_path
+    ):
+        raise RuntimeError(
+            "download_receipt_invalid: indexed relative path does not match."
+        )
+    if (
+        len(str(receipt.get("preparation_receipt_sha256") or "")) != 64
+        or not str(receipt.get("downloaded_at") or "").strip()
+    ):
+        raise RuntimeError(
+            "download_receipt_invalid: preparation identity or timestamp is missing."
+        )
+    verify_receipt_attestation(
+        receipt,
+        expected_public_key=expected_attestation_public_key,
+    )
     return receipt
 
 
-def _verify_published_item(
-    *,
-    item: dict[str, Any],
-    expected_url: str,
-    expected_sha256: str,
-    binding: dict[str, Any],
-) -> None:
-    item_id = str(item.get("item_id") or "").strip()
-    drive_path = unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
-    item_path = unquote(urlparse(expected_url).path)
-    if not item_path.casefold().startswith((drive_path + "/").casefold()):
-        raise RuntimeError(
-            "publication_invalid: item URL is outside the bound document library."
-        )
-    metadata = sharepoint_connector._get_item(item_path[len(drive_path) :])
+def _sharepoint_capability_identity(
+    path: Path,
+    config: dict[str, Any],
+) -> tuple[str, str]:
+    envelope = read_json(path)
+    result = envelope.get("result") if isinstance(envelope, dict) else None
+    attestation = result.get("attestation") if isinstance(result, dict) else None
+    intake = config.get("sharepoint_intake", {})
+    expected_environment = (
+        str(intake.get("environment") or "").strip().lower()
+        if isinstance(intake, dict)
+        else ""
+    )
     if (
-        str(metadata.get("id") or "") != item_id
-        or str(metadata.get("parentReference", {}).get("driveId") or "")
-        != binding["drive_id"]
-        or str(metadata.get("webUrl") or "") != expected_url
+        not isinstance(attestation, dict)
+        or result.get("environment") != expected_environment
+        or attestation.get("algorithm") != "Ed25519"
+        or not str(attestation.get("public_key") or "")
     ):
         raise RuntimeError(
-            "publication_invalid: live SharePoint item identity/path does not match."
+            "sharepoint_mcp_capability_invalid: environment or attestation key is invalid."
         )
-    content = sharepoint_connector._graph_request(
-        "GET", f"/drives/{binding['drive_id']}/items/{item_id}/content"
-    )
-    if hashlib.sha256(content).hexdigest() != expected_sha256:
-        raise RuntimeError(
-            "publication_invalid: live SharePoint content checksum does not match."
-        )
+    return expected_environment, str(attestation["public_key"])
 
 
-def _publication_target(run_root: Path) -> tuple[str, str]:
-    binding_path = run_root / "manifest" / "sharepoint_target_binding.json"
-    if not binding_path.is_file():
-        raise RuntimeError(
-            "sharepoint_binding_missing: the run has no frozen SharePoint target."
-        )
-    binding = load_binding(binding_path)
-    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
-    if run_manifest.get("sharepoint_binding_sha256") != sha256_file(binding_path):
-        raise RuntimeError(
-            "sharepoint_binding_changed: the frozen SharePoint target no longer matches the run manifest."
-        )
-    drive_path = unquote(urlparse(binding["drive_web_url"]).path).rstrip("/")
-    return str(binding["hostname"]), drive_path
+def _freeze_download_receipt(
+    run_root: Path, receipt: dict[str, Any]
+) -> str:
+    frozen_path = run_root / "manifest" / "source_download_receipt.json"
+    write_json(frozen_path, receipt)
+    return sha256_file(frozen_path)
 
 
 def _unresolved_payload(
@@ -424,6 +380,7 @@ def _publishable_artifacts(run_root: Path) -> list[Path]:
         run_root / "manifest" / "run_state.json",
         run_root / "manifest" / "audit_manifest.json",
         run_root / "manifest" / "publication_receipt.json",
+        run_root / "manifest" / "publication_verification_receipts.json",
         run_root / "manifest" / "publication_set.json",
         run_root / "manifest" / "notification_receipt.json",
         run_root / "manifest" / "failure_manifest.json",
@@ -439,6 +396,7 @@ def _publishable_artifacts(run_root: Path) -> list[Path]:
         for path in run_root.rglob("*")
         if path.is_file()
         and path not in mutable
+        and (run_root / "extracted") not in path.parents
         and (manual_source is None or manual_source not in path.parents)
     )
 
@@ -469,6 +427,219 @@ def _await_publication(run_root: Path, state_path: Path) -> dict[str, Any]:
     }
 
 
+def _record_billing_outputs(
+    *,
+    run_root: Path,
+    state_path: Path,
+    candidates: dict[str, Any],
+    query_log: list[dict[str, Any]],
+) -> tuple[Path, Path]:
+    candidates_path, query_log_path = write_billing_outputs(
+        run_root=run_root,
+        candidates=candidates,
+        query_log=query_log,
+    )
+    audit_path = run_root / "manifest" / "audit_manifest.json"
+    audit = read_json(audit_path)
+    audit["query_logs"] = [
+        {
+            "path": str(query_log_path),
+            "sha256": sha256_file(query_log_path),
+            "chunk_count": len(query_log),
+        }
+    ]
+    write_json(audit_path, audit)
+    update_stage(
+        state_path,
+        "billing_preparation",
+        "completed",
+        counts={"query_chunks": len(query_log)},
+        artifacts=[str(candidates_path), str(query_log_path)],
+    )
+    return candidates_path, query_log_path
+
+
+def _record_database_handoff(
+    run_root: Path,
+    *,
+    name: str,
+    request_path: Path,
+    receipt_paths: list[Path],
+) -> None:
+    audit_path = run_root / "manifest" / "audit_manifest.json"
+    audit = read_json(audit_path)
+    handoffs = audit.setdefault("database_handoffs", {})
+    handoffs[name] = {
+        "request_sha256": sha256_file(request_path),
+        "receipt_sha256": [sha256_file(path) for path in receipt_paths],
+    }
+    write_json(audit_path, audit)
+
+
+def _perform_matching(
+    *,
+    run_root: Path,
+    state_path: Path,
+    config: dict[str, Any],
+    normalized: dict[str, Any],
+    candidates: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    update_stage(state_path, "deterministic_comparison", "running")
+    candidate_map = candidates.get("candidates_by_line", {})
+    match_rows = [
+        classify_line(line, candidate_map.get(str(line.get("line_id")), []))
+        for line in normalized.get("lines", [])
+    ]
+    matches_path = run_root / "normalized" / "match_results.json"
+    write_json(matches_path, {"rows": match_rows})
+    query_log_path = run_root / "logs" / "billing_query_log.json"
+    query_log = read_json(query_log_path)
+    unresolved = _unresolved_payload(
+        match_rows,
+        candidates,
+        run_id=run_root.name,
+        parser_warnings=read_json(run_root / "logs" / "parser_warnings.json"),
+        query_log_identity={
+            "path": str(query_log_path),
+            "sha256": sha256_file(query_log_path),
+            "chunk_count": len(query_log),
+        },
+        remaining_query_rounds=int(
+            config.get("limits", {}).get("investigation_query_rounds", 2)
+        ),
+    )
+    unresolved_path = run_root / "evidence" / "exception_input.json"
+    write_json(unresolved_path, unresolved)
+    update_stage(
+        state_path,
+        "deterministic_comparison",
+        "completed",
+        counts={
+            "matched_rows": len(match_rows) - len(unresolved["rows"]),
+            "unresolved_rows": len(unresolved["rows"]),
+        },
+        artifacts=[str(matches_path), str(unresolved_path)],
+    )
+    return match_rows, unresolved
+
+
+def _record_persistence(
+    *,
+    run_root: Path,
+    state_path: Path,
+    persisted: dict[str, Any],
+    persistence_manifest: dict[str, Any],
+) -> None:
+    persisted_path = run_root / "normalized" / "persisted_match_results.json"
+    persistence_manifest_path = run_root / "manifest" / "persistence_manifest.json"
+    write_json(persisted_path, persisted)
+    write_json(persistence_manifest_path, persistence_manifest)
+    update_stage(
+        state_path,
+        "supplier_persistence",
+        "completed",
+        counts={
+            "requests": persistence_manifest["request_count"],
+            "invoices": persistence_manifest["invoice_count"],
+            "supplier_lines": persistence_manifest["supplier_line_count"],
+        },
+        artifacts=[str(persistence_manifest_path)],
+    )
+    update_stage(
+        state_path,
+        "result_persistence",
+        "completed",
+        counts={"results": persistence_manifest["result_count"]},
+        artifacts=[str(persisted_path)],
+    )
+
+
+def _continue_after_persistence(
+    *,
+    args: argparse.Namespace,
+    run_root: Path,
+    state_path: Path,
+    config: dict[str, Any],
+    persisted: dict[str, Any],
+) -> dict[str, Any]:
+    unresolved_path = run_root / "evidence" / "exception_input.json"
+    unresolved = read_json(unresolved_path)
+    update_stage(state_path, "raw_workbook", "running")
+    final_rows = persisted["rows"]
+    refined_output: Path | None = None
+    if unresolved["rows"]:
+        if args.investigation is None:
+            update_stage(
+                state_path,
+                "exception_investigation",
+                "running",
+                artifacts=[str(unresolved_path)],
+            )
+        else:
+            update_stage(state_path, "exception_investigation", "running")
+            final_rows = _apply_investigation(
+                final_rows,
+                read_json(args.investigation),
+                expected_run_id=run_root.name,
+            )
+            update_stage(
+                state_path,
+                "exception_investigation",
+                "completed",
+                counts={"investigated_rows": len(unresolved["rows"])},
+                artifacts=[str(args.investigation)],
+            )
+            refined_output = (
+                run_root / "refined-recon-report" / "refined-reconciliation.xlsx"
+            )
+    else:
+        update_stage(state_path, "exception_investigation", "skipped")
+        update_stage(state_path, "refined_workbook", "skipped")
+
+    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+    report_manifest = run_root / "manifest" / "report_manifest.json"
+    raw_output = run_root / "raw-recon-report" / "raw-reconciliation.xlsx"
+    provider = str(read_json(state_path).get("provider") or "")
+    write_reports(
+        raw_rows=persisted["rows"],
+        refined_input_rows=final_rows,
+        raw_output=raw_output,
+        refined_output=refined_output,
+        manifest=report_manifest,
+        config=config,
+        run_path=_logical_run_path(provider, run_root),
+        period=str(run_manifest.get("billing_period") or ""),
+    )
+    update_stage(
+        state_path,
+        "raw_workbook",
+        "completed",
+        counts={"reported_rows": len(final_rows)},
+        artifacts=[str(raw_output)],
+    )
+    if refined_output:
+        update_stage(
+            state_path,
+            "refined_workbook",
+            "completed",
+            counts={"reported_rows": len(final_rows)},
+            artifacts=[str(refined_output)],
+        )
+    if unresolved["rows"] and args.investigation is None:
+        return {
+            "run_id": run_root.name,
+            "run_root": str(run_root),
+            "status": "awaiting_exception_investigation",
+            "unresolved_rows": len(unresolved["rows"]),
+            "exception_input": str(unresolved_path),
+            "raw_workbook": str(raw_output),
+        }
+    if args.local_only:
+        update_stage(state_path, "publication", "skipped")
+        return _complete_validation(run_root, config, state_path)
+    return _await_publication(run_root, state_path)
+
+
 def resume_run(args: argparse.Namespace) -> dict[str, Any]:
     run_root = args.resume_run_root.resolve()
     config = load_config(args.config.resolve())
@@ -476,8 +647,107 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
     state = read_json(state_path)
     if state.get("run_status") != "running":
         raise RuntimeError("resume_invalid: run must be in running state.")
+    billing_stage = state.get("stages", {}).get("billing_preparation", {})
+    persistence_stage = state.get("stages", {}).get("supplier_persistence", {})
     stage = state.get("stages", {}).get("exception_investigation", {})
     publication_stage = state.get("stages", {}).get("publication", {})
+    if billing_stage.get("status") == "running":
+        receipt_paths = getattr(args, "billing_mcp_receipt", None)
+        if not isinstance(receipt_paths, list) or not receipt_paths:
+            raise RuntimeError(
+                "resume_invalid: --billing-mcp-receipt is required for every query chunk."
+            )
+        plan_path = run_root / "manifest" / "billing_mcp_plan.json"
+        plan = read_json(plan_path)
+        normalized = read_json(run_root / "normalized" / "provider_lines.json")
+        candidates, query_log = consume_billing_query_receipts(
+            plan=plan,
+            receipt_paths=[path.resolve() for path in receipt_paths],
+            normalized=normalized,
+            config=config,
+        )
+        _record_billing_outputs(
+            run_root=run_root,
+            state_path=state_path,
+            candidates=candidates,
+            query_log=query_log,
+        )
+        _record_database_handoff(
+            run_root,
+            name="billing_query",
+            request_path=plan_path,
+            receipt_paths=[path.resolve() for path in receipt_paths],
+        )
+        plan_path.unlink()
+        match_rows, _ = _perform_matching(
+            run_root=run_root,
+            state_path=state_path,
+            config=config,
+            normalized=normalized,
+            candidates=candidates,
+        )
+        provider_account_id = int(
+            read_json(run_root / "manifest" / "run_manifest.json")[
+                "provider_account_id"
+            ]
+        )
+        persistence_request = prepare_persistence_request(
+            environment=str(plan["environment"]),
+            run_id=run_root.name,
+            normalized=normalized,
+            candidates=candidates,
+            matches={"rows": match_rows},
+            provider_account_id=provider_account_id,
+            run_path=_logical_run_path(str(state.get("provider") or ""), run_root),
+        )
+        request_path = run_root / "manifest" / "database_persistence_request.json"
+        write_json(request_path, persistence_request)
+        update_stage(
+            state_path,
+            "supplier_persistence",
+            "running",
+            artifacts=[str(request_path)],
+        )
+        update_stage(state_path, "result_persistence", "running")
+        return {
+            "run_id": run_root.name,
+            "run_root": str(run_root),
+            "status": "awaiting_core_persistence",
+            "database_persistence_request": str(request_path),
+        }
+    if persistence_stage.get("status") == "running":
+        receipt_path = getattr(args, "database_persistence_receipt", None)
+        if receipt_path is None:
+            raise RuntimeError(
+                "resume_invalid: --database-persistence-receipt is required."
+            )
+        request_path = (
+            run_root / "manifest" / "database_persistence_request.json"
+        )
+        request = read_json(request_path)
+        persisted, persistence_manifest = consume_persistence_receipt(
+            request, receipt_path.resolve()
+        )
+        _record_database_handoff(
+            run_root,
+            name="core_persistence",
+            request_path=request_path,
+            receipt_paths=[receipt_path.resolve()],
+        )
+        _record_persistence(
+            run_root=run_root,
+            state_path=state_path,
+            persisted=persisted,
+            persistence_manifest=persistence_manifest,
+        )
+        request_path.unlink()
+        return _continue_after_persistence(
+            args=args,
+            run_root=run_root,
+            state_path=state_path,
+            config=config,
+            persisted=persisted,
+        )
     if stage.get("status") == "running":
         if args.investigation is None:
             raise RuntimeError("resume_invalid: --investigation is required.")
@@ -530,10 +800,29 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
         if args.publication_receipt is None:
             raise RuntimeError("resume_invalid: --publication-receipt is required.")
         receipt = read_json(args.publication_receipt)
+        if not isinstance(receipt, dict) or set(receipt) != PUBLICATION_RECEIPT_FIELDS:
+            raise RuntimeError(
+                "publication_invalid: native receipt fields do not match the contract."
+            )
         uploaded = receipt.get("uploaded_artifacts", [])
-        if receipt.get("run_id") != run_root.name:
-            raise RuntimeError("publication_invalid: receipt run_id does not match.")
-        if not isinstance(uploaded, list) or not uploaded or not all(isinstance(item, dict) for item in uploaded):
+        if (
+            receipt.get("contract_version") != 1
+            or receipt.get("status") != "published"
+            or receipt.get("run_id") != run_root.name
+        ):
+            raise RuntimeError(
+                "publication_invalid: native receipt identity does not match."
+            )
+        if (
+            not isinstance(uploaded, list)
+            or not uploaded
+            or not all(
+                isinstance(item, dict)
+                and set(item) == PUBLISHED_ARTIFACT_FIELDS
+                and item.get("status") == "uploaded"
+                for item in uploaded
+            )
+        ):
             raise RuntimeError("publication_invalid: receipt requires uploaded_artifacts.")
         publication_set = read_json(run_root / "manifest" / "publication_set.json")
         if publication_set.get("run_id") != run_root.name:
@@ -544,98 +833,123 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
         provider = run_root.parent.parent.parent.name
         year = run_root.parent.parent.name
         month = run_root.parent.name
-        run_prefix = f"/recon-result-space/{provider}/{year}/{month}/{run_root.name}/"
-        expected_hostname, drive_path = _publication_target(run_root)
-        frozen_binding_path = (
-            run_root / "manifest" / "sharepoint_target_binding.json"
-        )
-        binding = load_binding(frozen_binding_path)
-        live_checks: list[tuple[dict[str, Any], str, str]] = []
-        for item in uploaded:
-            relative = Path(str(item.get("local_path", ""))).resolve().relative_to(run_root).as_posix()
-            parsed_url = urlparse(str(item.get("sharepoint_url", "")))
-            decoded_path = unquote(parsed_url.path)
-            expected_suffix = drive_path + run_prefix + relative
-            if (
-                parsed_url.scheme != "https"
-                or parsed_url.netloc.lower() != expected_hostname
-                or decoded_path.casefold() != expected_suffix.casefold()
-                or not str(item.get("item_id", "")).strip()
-            ):
-                raise RuntimeError(
-                    "publication_invalid: artifact URL/item ID does not prove the exact run-relative destination."
-                )
-            live_checks.append(
-                (
-                    item,
-                    str(item.get("sharepoint_url") or ""),
-                    str(item.get("sha256") or ""),
-                )
-            )
         expected = {
-            str(item["local_path"]): str(item["sha256"])
+            str(item["relative_path"]): {
+                "local_path": str(item["local_path"]),
+                "sha256": str(item["sha256"]),
+            }
             for item in frozen_artifacts
         }
         current = {
-            path: sha256_file(Path(path))
-            for path in expected
+            relative: sha256_file(Path(details["local_path"]))
+            for relative, details in expected.items()
         }
-        if current != expected:
+        if current != {
+            relative: details["sha256"]
+            for relative, details in expected.items()
+        }:
             raise RuntimeError("publication_invalid: a frozen artifact changed after the publication pause.")
         received = {
-            str(item.get("local_path", "")): str(item.get("sha256", ""))
+            str(item.get("relative_path", "")): {
+                "local_path": str(item.get("local_path", "")),
+                "sha256": str(item.get("sha256", "")),
+            }
             for item in uploaded
         }
         if len(uploaded) != len(received) or received != expected:
             raise RuntimeError("publication_invalid: receipt paths/checksums do not match the run artifacts.")
         run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+        verification_expected = {
+            f"{provider}/{year}/{month}/{run_root.name}/{relative}": details[
+                "sha256"
+            ]
+            for relative, details in expected.items()
+        }
         if run_manifest.get("intake_mode") == "manual_upload":
-            source_move = receipt.get("source_move_receipt", {})
-            source_url = str(source_move.get("sharepoint_url", ""))
-            parsed_source_url = urlparse(source_url)
-            decoded_source_path = unquote(parsed_source_url.path)
+            source_move = receipt.get("source_move_receipt")
             source_name = Path(str(run_manifest.get("source_file") or "")).name
-            expected_source_suffix = drive_path + run_prefix + f"source/{source_name}"
+            source_relative = f"source/{source_name}"
             if (
+                not isinstance(source_move, dict)
+                or set(source_move) != SOURCE_MOVE_FIELDS
+                or
                 source_move.get("status") != "moved"
-                or not str(source_move.get("item_id", "")).strip()
-                or source_move.get("item_id")
-                != run_manifest.get("sharepoint_source_item_id")
+                or source_move.get("source_name") != source_name
+                or source_move.get("relative_path") != source_relative
                 or source_move.get("sha256") != run_manifest.get("source_checksum_sha256")
-                or parsed_source_url.scheme != "https"
-                or parsed_source_url.netloc.lower() != expected_hostname
-                or decoded_source_path.casefold() != expected_source_suffix.casefold()
             ):
                 raise RuntimeError("publication_invalid: manual upload requires a run-scoped source move receipt.")
-            live_checks.append(
-                (
-                    source_move,
-                    source_url,
-                    str(run_manifest.get("source_checksum_sha256") or ""),
-                )
+            verification_expected[
+                f"{provider}/{year}/{month}/{run_root.name}/{source_relative}"
+            ] = str(run_manifest.get("source_checksum_sha256") or "")
+        elif receipt.get("source_move_receipt") is not None:
+            raise RuntimeError(
+                "publication_invalid: provider API intake cannot include a source move."
             )
-        sharepoint_connector.configure_runtime(
-            auth_mode=getattr(args, "sharepoint_auth_mode", "auth_proxy"),
-            binding_path=frozen_binding_path,
+        verification_arguments = getattr(
+            args, "publication_verification_receipt", None
         )
-        for item, expected_url, expected_sha256 in live_checks:
-            _verify_published_item(
-                item=item,
-                expected_url=expected_url,
-                expected_sha256=expected_sha256,
-                binding=binding,
+        if not isinstance(verification_arguments, list):
+            raise RuntimeError(
+                "publication_invalid: result-space verification receipts are required."
+            )
+        verified: dict[str, str] = {}
+        capability_path = (
+            run_root / "manifest" / "sharepoint_mcp_capabilities.json"
+        )
+        if not capability_path.is_file():
+            raise RuntimeError(
+                "publication_invalid: frozen SharePoint MCP capability is missing."
+            )
+        expected_environment, expected_attestation_public_key = (
+            _sharepoint_capability_identity(
+                capability_path,
+                config,
+            )
+        )
+        for verification_path in verification_arguments:
+            verification = _verify_download_receipt(
+                receipt_path=verification_path.resolve(),
+                provider=provider,
+                allowed_spaces=("result",),
+                expected_environment=expected_environment,
+                expected_attestation_public_key=expected_attestation_public_key,
+                forbidden_root=run_root,
+            )
+            relative_path = str(verification["index"]["relative_path"])
+            if relative_path in verified:
+                raise RuntimeError(
+                    "publication_invalid: duplicate result-space verification receipt."
+                )
+            verified[relative_path] = str(verification["sha256"])
+        if verified != verification_expected:
+            raise RuntimeError(
+                "publication_invalid: MCP result-space re-downloads do not match publication."
             )
         receipt_path = run_root / "manifest" / "publication_receipt.json"
         write_json(receipt_path, receipt)
+        verification_manifest = (
+            run_root / "manifest" / "publication_verification_receipts.json"
+        )
+        write_json(
+            verification_manifest,
+            {
+                "contract_version": 1,
+                "run_id": run_root.name,
+                "verified_artifacts": verified,
+            },
+        )
         update_stage(
             state_path,
             "publication",
             "completed",
             counts={"uploaded_artifacts": len(uploaded)},
-            artifacts=[str(receipt_path)],
+            artifacts=[str(receipt_path), str(verification_manifest)],
         )
         return _complete_validation(run_root, config, state_path)
-    raise RuntimeError("resume_invalid: run is not awaiting investigation or publication.")
+    raise RuntimeError(
+        "resume_invalid: run is not awaiting billing, persistence, investigation, or publication."
+    )
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -660,7 +974,49 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if features.get("provider_api_enabled") is not True or adapters.get(provider_key) is not True:
             raise RuntimeError("provider_api_not_available: provider API intake is not enabled for this provider.")
         _validate_provider_api_provenance(args)
-    capabilities = capability_manifest(config, local_check=True)
+    database_mcp_identity: dict[str, Any] | None = None
+    if args.run_mode == "reconciliation" and not args.local_only:
+        database_capabilities_argument = getattr(
+            args, "database_mcp_capabilities", None
+        )
+        database_probe_argument = getattr(args, "database_mcp_probe", None)
+        if (
+            database_capabilities_argument is None
+            or database_probe_argument is None
+        ):
+            raise RuntimeError(
+                "database_mcp_receipts_required: Fleet reconciliation requires capability and probe receipts."
+            )
+        database_config = config.get("database_mcp", {})
+        environment = (
+            str(database_config.get("environment") or "").strip().lower()
+            if isinstance(database_config, dict)
+            else ""
+        )
+        if not environment:
+            raise RuntimeError(
+                "database_mcp_config_invalid: database_mcp.environment is required."
+            )
+        database_mcp_identity = validate_database_mcp(
+            read_json(database_capabilities_argument.resolve()),
+            read_json(database_probe_argument.resolve()),
+            environment=environment,
+            require_persistence=(
+                config.get("features", {}).get("core_persistence_enabled") is True
+            ),
+            row_limit=int(
+                config.get("limits", {}).get("billing_query_row_limit", 5000)
+            ),
+        )
+    capabilities = capability_manifest(
+        config,
+        local_check=args.local_only,
+        database_mcp_validated=database_mcp_identity is not None,
+        database_mcp_persistence=bool(
+            database_mcp_identity
+            and database_mcp_identity.get("core_persistence") is True
+        ),
+    )
     required = ["provider_parsing", "archive_validation"]
     if args.run_mode == "reconciliation":
         required.extend(
@@ -680,29 +1036,41 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(
             "run_input_missing: --provider, --source-file, --result-root, and --run-mode are required for a new run."
         )
-    binding_argument = getattr(args, "sharepoint_binding", None)
-    if not args.local_only and binding_argument is None:
-        raise RuntimeError(
-            "sharepoint_binding_required: Fleet publication requires a validated target binding."
-        )
     verified_download_receipt: dict[str, Any] | None = None
+    sharepoint_capability_argument = getattr(
+        args, "sharepoint_mcp_capabilities", None
+    )
+    expected_environment = ""
+    expected_attestation_public_key = ""
+    if not args.local_only:
+        if sharepoint_capability_argument is None:
+            raise RuntimeError(
+                "sharepoint_mcp_capability_required: Fleet runs require the validated capability envelope."
+            )
+        expected_environment, expected_attestation_public_key = (
+            _sharepoint_capability_identity(
+                sharepoint_capability_argument.resolve(),
+                config,
+            )
+        )
     if not args.local_only and args.intake_mode == "manual_upload":
         receipt_argument = getattr(args, "source_download_receipt", None)
         if receipt_argument is None:
             raise RuntimeError(
-                "source_download_receipt_required: Fleet intake requires a verified binary download receipt."
+                "source_download_receipt_required: Fleet intake requires capability and binary download receipts."
             )
         verified_download_receipt = _verify_download_receipt(
             receipt_path=receipt_argument.resolve(),
-            binding_path=binding_argument.resolve(),
-            source_file=args.source_file.resolve(),
             provider=args.provider,
-            auth_mode=getattr(args, "sharepoint_auth_mode", "auth_proxy"),
             allowed_spaces=(
                 ("upload", "reference")
                 if args.run_mode == "parser_validation"
                 else ("upload",)
             ),
+            expected_file=args.source_file.resolve(),
+            expected_relative_path=f"{args.provider}/{args.source_file.name}",
+            expected_environment=expected_environment,
+            expected_attestation_public_key=expected_attestation_public_key,
         )
     (args.result_root / args.provider).mkdir(parents=True, exist_ok=True)
     source_checksum = sha256_file(args.source_file)
@@ -719,24 +1087,45 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     run_manifest_path = run_root / "manifest" / "run_manifest.json"
     run_manifest = read_json(run_manifest_path)
     run_manifest["billing_period"] = args.billing_period or ""
+    if args.provider_account_id is not None:
+        run_manifest["provider_account_id"] = args.provider_account_id
+    if database_mcp_identity is not None:
+        capability_snapshot = (
+            run_root / "manifest" / "database_mcp_capabilities.json"
+        )
+        probe_snapshot = run_root / "manifest" / "database_mcp_probe.json"
+        write_json(
+            capability_snapshot,
+            read_json(database_capabilities_argument.resolve()),
+        )
+        write_json(probe_snapshot, read_json(database_probe_argument.resolve()))
+        run_manifest["database_mcp_capability_sha256"] = sha256_file(
+            capability_snapshot
+        )
+        run_manifest["database_mcp_probe_sha256"] = sha256_file(probe_snapshot)
+    if sharepoint_capability_argument is not None:
+        capability_snapshot = (
+            run_root / "manifest" / "sharepoint_mcp_capabilities.json"
+        )
+        write_json(
+            capability_snapshot,
+            read_json(sharepoint_capability_argument.resolve()),
+        )
+        run_manifest["sharepoint_mcp_capability_sha256"] = sha256_file(
+            capability_snapshot
+        )
     if verified_download_receipt is not None:
-        run_manifest["sharepoint_source_item_id"] = verified_download_receipt[
-            "source_item_id"
-        ]
         run_manifest["sharepoint_source_space"] = str(
             verified_download_receipt.get("space") or "upload"
         )
-        frozen_index_sha256 = _freeze_source_index(
-            run_root, verified_download_receipt
+        run_manifest["sharepoint_source_index"] = verified_download_receipt[
+            "index"
+        ]
+        run_manifest["source_download_receipt_sha256"] = (
+            _freeze_download_receipt(
+                run_root, verified_download_receipt
+            )
         )
-        if frozen_index_sha256:
-            run_manifest["sharepoint_source_index_sha256"] = frozen_index_sha256
-    if binding_argument is not None:
-        binding = _freeze_sharepoint_binding(run_root, binding_argument.resolve())
-        frozen_binding_path = run_root / "manifest" / "sharepoint_target_binding.json"
-        run_manifest["sharepoint_site_id"] = binding["site_id"]
-        run_manifest["sharepoint_drive_id"] = binding["drive_id"]
-        run_manifest["sharepoint_binding_sha256"] = sha256_file(frozen_binding_path)
     write_json(run_manifest_path, run_manifest)
     state_path = run_root / "manifest" / "run_state.json"
     create_state(
@@ -796,6 +1185,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 config_path=config_path,
                 provider=args.provider,
                 run_root=run_root,
+                input_dir=(
+                    run_root / "extracted"
+                    if source.suffix.lower() == ".zip"
+                    and args.provider in {"Telstra", "Vocus", "Megaport", "Equinix"}
+                    else run_root / "source"
+                ),
             )
         )
         normalized_path = run_root / "normalized" / "provider_lines.json"
@@ -834,6 +1229,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("reconciliation_input_missing: --billing-sql-file and --provider-account-id are required.")
         current_stage = "billing_preparation"
         update_stage(state_path, current_stage, "running")
+        if not args.local_only:
+            plan = prepare_billing_query_plan(
+                normalized=normalized,
+                sql_file=args.billing_sql_file.resolve(),
+                config=config,
+                environment=str(database_mcp_identity["environment"]),
+            )
+            plan_path = run_root / "manifest" / "billing_mcp_plan.json"
+            write_json(plan_path, plan)
+            update_stage(
+                state_path,
+                current_stage,
+                "running",
+                counts={"query_chunks": len(plan["requests"])},
+                artifacts=[str(plan_path)],
+            )
+            return {
+                "run_id": run_id,
+                "run_root": str(run_root),
+                "status": "awaiting_billing_query",
+                "billing_mcp_plan": str(plan_path),
+                "query_chunks": len(plan["requests"]),
+            }
         _run_command(
             _billing_command(
                 billing_cli=billing_cli,
@@ -846,53 +1264,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         candidates = read_json(candidates_path)
         query_log_path = run_root / "logs" / "billing_query_log.json"
         query_log = read_json(query_log_path)
-        audit_path = run_root / "manifest" / "audit_manifest.json"
-        audit = read_json(audit_path)
-        audit["query_logs"] = [
-            {
-                "path": str(query_log_path),
-                "sha256": sha256_file(query_log_path),
-                "chunk_count": len(query_log),
-            }
-        ]
-        write_json(audit_path, audit)
-        update_stage(
-            state_path,
-            current_stage,
-            "completed",
-            counts={"query_chunks": len(query_log)},
-            artifacts=[str(candidates_path), str(query_log_path)],
+        _record_billing_outputs(
+            run_root=run_root,
+            state_path=state_path,
+            candidates=candidates,
+            query_log=query_log,
         )
 
         current_stage = "deterministic_comparison"
-        update_stage(state_path, current_stage, "running")
-        candidate_map = candidates.get("candidates_by_line", {})
-        match_rows = [
-            classify_line(line, candidate_map.get(str(line.get("line_id")), []))
-            for line in normalized.get("lines", [])
-        ]
-        matches_path = run_root / "normalized" / "match_results.json"
-        write_json(matches_path, {"rows": match_rows})
-        unresolved = _unresolved_payload(
-            match_rows,
-            candidates,
-            run_id=run_id,
-            parser_warnings=read_json(run_root / "logs" / "parser_warnings.json"),
-            query_log_identity={
-                "path": str(query_log_path),
-                "sha256": sha256_file(query_log_path),
-                "chunk_count": len(query_log),
-            },
-            remaining_query_rounds=int(config.get("limits", {}).get("investigation_query_rounds", 2)),
-        )
-        unresolved_path = run_root / "evidence" / "exception_input.json"
-        write_json(unresolved_path, unresolved)
-        update_stage(
-            state_path,
-            current_stage,
-            "completed",
-            counts={"matched_rows": len(match_rows) - len(unresolved["rows"]), "unresolved_rows": len(unresolved["rows"])},
-            artifacts=[str(matches_path), str(unresolved_path)],
+        match_rows, _ = _perform_matching(
+            run_root=run_root,
+            state_path=state_path,
+            config=config,
+            normalized=normalized,
+            candidates=candidates,
         )
 
         current_stage = "supplier_persistence"
@@ -908,10 +1293,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "run_path": _logical_run_path(args.provider, run_root),
         }
         if core_mode == "sqlite_shadow":
-            if not args.local_only:
-                raise RuntimeError(
-                    "sqlite_shadow_not_allowed: SQLite persistence is restricted to --local-only runs."
-                )
             persisted, persistence_manifest = persist_shadow_run(**persistence_args)
         elif core_mode in {"sqlserver", "azure_sql"}:
             persisted, persistence_manifest = persist_sqlserver_run(
@@ -922,97 +1303,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "core_persistence_not_available: NEXON_RECON_CORE_MODE must be "
                 "sqlite_shadow, sqlserver, or azure_sql."
             )
-        persisted_path = run_root / "normalized" / "persisted_match_results.json"
-        persistence_manifest_path = run_root / "manifest" / "persistence_manifest.json"
-        write_json(persisted_path, persisted)
-        write_json(persistence_manifest_path, persistence_manifest)
-        update_stage(
-            state_path,
-            "supplier_persistence",
-            "completed",
-            counts={
-                "requests": persistence_manifest["request_count"],
-                "invoices": persistence_manifest["invoice_count"],
-                "supplier_lines": persistence_manifest["supplier_line_count"],
-            },
-            artifacts=[str(persistence_manifest_path)],
+        _record_persistence(
+            run_root=run_root,
+            state_path=state_path,
+            persisted=persisted,
+            persistence_manifest=persistence_manifest,
         )
-        update_stage(
-            state_path,
-            "result_persistence",
-            "completed",
-            counts={"results": persistence_manifest["result_count"]},
-            artifacts=[str(persisted_path)],
-        )
-
         current_stage = "raw_workbook"
-        update_stage(state_path, current_stage, "running")
-        final_rows = persisted["rows"]
-        refined_output: Path | None = None
-        if unresolved["rows"]:
-            if args.investigation is None:
-                update_stage(state_path, "exception_investigation", "running", artifacts=[str(unresolved_path)])
-            else:
-                current_stage = "exception_investigation"
-                update_stage(state_path, current_stage, "running")
-                final_rows = _apply_investigation(
-                    final_rows,
-                    read_json(args.investigation),
-                    expected_run_id=run_id,
-                )
-                update_stage(
-                    state_path,
-                    current_stage,
-                    "completed",
-                    counts={"investigated_rows": len(unresolved["rows"])},
-                    artifacts=[str(args.investigation)],
-                )
-                refined_output = run_root / "refined-recon-report" / "refined-reconciliation.xlsx"
-        else:
-            update_stage(state_path, "exception_investigation", "skipped")
-            update_stage(state_path, "refined_workbook", "skipped")
-
-        report_manifest = run_root / "manifest" / "report_manifest.json"
-        raw_output = run_root / "raw-recon-report" / "raw-reconciliation.xlsx"
-        write_reports(
-            raw_rows=persisted["rows"],
-            refined_input_rows=final_rows,
-            raw_output=raw_output,
-            refined_output=refined_output,
-            manifest=report_manifest,
+        return _continue_after_persistence(
+            args=args,
+            run_root=run_root,
+            state_path=state_path,
             config=config,
-            run_path=_logical_run_path(args.provider, run_root),
-            period=args.billing_period or "",
+            persisted=persisted,
         )
-        update_stage(
-            state_path,
-            "raw_workbook",
-            "completed",
-            counts={"reported_rows": len(final_rows)},
-            artifacts=[str(raw_output)],
-        )
-        if refined_output:
-            update_stage(
-                state_path,
-                "refined_workbook",
-                "completed",
-                counts={"reported_rows": len(final_rows)},
-                artifacts=[str(refined_output)],
-            )
-        if unresolved["rows"] and args.investigation is None:
-            return {
-                "run_id": run_id,
-                "run_root": str(run_root),
-                "status": "awaiting_exception_investigation",
-                "unresolved_rows": len(unresolved["rows"]),
-                "exception_input": str(unresolved_path),
-                "raw_workbook": str(raw_output),
-            }
-
-        if args.local_only:
-            update_stage(state_path, "publication", "skipped")
-            return _complete_validation(run_root, config, state_path)
-        return _await_publication(run_root, state_path)
     except Exception as exc:
         update_stage(
             state_path,
@@ -1061,13 +1365,17 @@ def main() -> int:
     parser.add_argument("--provider-account-id", type=int)
     parser.add_argument("--investigation", type=Path)
     parser.add_argument("--publication-receipt", type=Path)
-    parser.add_argument("--sharepoint-binding", type=Path)
-    parser.add_argument("--source-download-receipt", type=Path)
     parser.add_argument(
-        "--sharepoint-auth-mode",
-        choices=["auth_proxy"],
-        default="auth_proxy",
+        "--publication-verification-receipt",
+        type=Path,
+        action="append",
     )
+    parser.add_argument("--source-download-receipt", type=Path)
+    parser.add_argument("--sharepoint-mcp-capabilities", type=Path)
+    parser.add_argument("--database-mcp-capabilities", type=Path)
+    parser.add_argument("--database-mcp-probe", type=Path)
+    parser.add_argument("--billing-mcp-receipt", type=Path, action="append")
+    parser.add_argument("--database-persistence-receipt", type=Path)
     parser.add_argument("--local-only", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

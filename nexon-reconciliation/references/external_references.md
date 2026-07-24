@@ -1,30 +1,32 @@
 # External References
 
-Use this reference only for runtime dependency boundaries and safe usage links. Nexon-specific behavior comes from the runtime contract, approved samples, configured credentials, and owner validation.
+## Skills And Runtime Tools
 
-## Codex Skills And Plugins
-
-- OpenAI Codex Skills: https://developers.openai.com/codex/skills
-- OpenAI Codex plugin build guidance: https://developers.openai.com/codex/plugins/build
-
-Do not use packaging or plugin research to change runtime reconciliation behavior.
+- `nexon-reconciliation` owns orchestration contracts and deterministic run
+  scripts.
+- `nexon-telco-parsers` owns provider extraction.
+- SharePoint Intake MCP owns read-only source index/prepare and binary
+  attestation.
+- Native SharePoint owns controlled moves and uploads.
+- Nexon Recon SQL MCP owns approved database capability.
+- Native Outlook owns text-only notifications.
 
 ## SharePoint Runtime
 
-Runtime SharePoint site discovery, movement, upload, and returned item URLs use
-the native SharePoint tool. `sharepoint_file_index.py` exclusively owns source
-inventory, candidate resolution, opaque selection IDs, item identity pinning,
-and binary download through the active Fleet SharePoint access profile. Its raw
-index records the source path, item ID, size, eTag, and validated site/drive
-binding; the agent receives only sanitized candidate metadata.
+The five SharePoint Intake MCP tools are the only read path. The service keeps
+tenant, site, drive, item, and credential identities behind its boundary.
+`fetch_intake_artifact.py` consumes a transient encrypted preparation and
+ephemeral private key, refuses redirects, redeems the decrypted ticket through
+the exact environment-specific HTTPS `/download` endpoint, verifies the signed
+attestation, and emits a sanitized receipt.
 
-The runtime contract requires site name `Nexon Reconciliation Automation`, path
-`/sites/NexonReconciliationAutomation`, and the site's default document library.
-The active profile determines the tenant hostname; the resolver validates and
-freezes the physical site and drive identity.
+Native SharePoint remains the write path. Result publication is proven by
+reusing MCP index/prepare plus the generic fetcher against the exact result run
+folder. No separate publication-verification tool exists.
 
 ## Observability
 
-- LangSmith observability: https://docs.langchain.com/langsmith/observability
-
-Tracing is optional for hosting/observability and must not change deterministic parser/matcher contracts.
+Use run state, audit, query, parser, persistence, report, native publication,
+and sanitized download receipts. Never log preparation contents, download
+endpoint, ticket, Graph identity, credentials, or customer-sensitive SQL
+parameters.

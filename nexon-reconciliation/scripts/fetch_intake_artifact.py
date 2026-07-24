@@ -1,4 +1,4 @@
-from recon_core.sharepoint_file_index import main
+from recon_core.fetch_intake_artifact import main
 
 
 if __name__ == "__main__":

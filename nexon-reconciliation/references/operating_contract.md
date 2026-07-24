@@ -2,138 +2,143 @@
 
 ## Run States
 
-Valid run states:
+Run states are `created`, `running`, `completed`, and `failed`.
 
-- `created`
-- `running`
-- `completed`
-- `failed`
-
-Valid stage states:
-
-- `pending`
-- `running`
-- `completed`
-- `failed`
-- `skipped`
-
-`completed` is terminal and requires validation. `failed` is terminal. A run awaiting exception investigation or publication remains `running`, with the corresponding stage set to `running`.
+`completed` requires validation. `failed` is terminal. A run awaiting billing
+query execution, core persistence, exception investigation, or publication
+remains `running` with that stage set to `running`.
 
 ## Stage Order
 
-1. `source_staging`
-2. `run_creation`
-3. `archive_validation`
-4. `provider_parsing`
-5. `billing_preparation`
-6. `deterministic_comparison`
-7. `supplier_persistence`
-8. `result_persistence`
-9. `raw_workbook`
-10. `exception_investigation`
-11. `refined_workbook`
-12. `publication`
-13. `validation`
-14. `notification`
+1. source staging
+2. run creation
+3. archive validation
+4. provider parsing
+5. billing preparation
+6. deterministic comparison
+7. atomic supplier and result persistence
+8. raw workbook
+9. exception investigation
+10. refined workbook
+11. publication
+12. validation
+13. notification
 
-Every stage records attempts, timestamps, counts, artifact paths, status, failure code, and retryability in `manifest/run_state.json`.
+## Source Artifacts
 
-## Required Artifacts
+Manual SharePoint intake uses:
 
-Every run:
+- unchanged SharePoint Intake MCP capability and probe envelopes;
+- a transient encrypted `prepared_download` envelope and ephemeral private key
+  deleted before redemption;
+- a durable sanitized `download_receipt.json`;
+- the locally staged package and its SHA-256.
+
+The preparation envelope, private key, and decrypted one-time ticket are never
+run artifacts.
+
+Provider API intake uses its download/provenance manifest and checksum instead.
+
+## Run Artifacts
+
+Every run contains:
 
 - `manifest/run_manifest.json`
 - `manifest/run_state.json`
 - `manifest/audit_manifest.json`
-- `manifest/unpack_manifest.json`
 - `manifest/parser_manifest.json`
+- `manifest/unpack_manifest.json`
 - `logs/parser_warnings.json`
 - `normalized/provider_lines.json`
 
-Fleet indexed source intake:
+Fleet manual intake also freezes a sanitized
+`manifest/source_download_receipt.json`. It contains no endpoint, ticket,
+credential, URL, site ID, drive ID, or item ID.
 
-- `manifest/sharepoint_file_index.json`
-
-Reconciliation:
-
-- `evidence/billing_candidates.json`
-- `logs/billing_query_log.json`
-- `normalized/match_results.json`
-- `manifest/persistence_manifest.json`
-- `normalized/persisted_match_results.json`
-- `raw-recon-report/raw-reconciliation.xlsx`
-- `manifest/report_manifest.json`
-
-When unresolved rows exist:
-
-- `evidence/exception_input.json`
-- `evidence/exception_investigation.json`
-- `normalized/final_match_results.json`
-- `refined-recon-report/refined-reconciliation.xlsx`
-
-Fleet publication:
-
-- `manifest/publication_set.json`
-- `manifest/publication_receipt.json`
+Reconciliation adds applicable query, candidate, persistence, match, report,
+exception, and workbook artifacts.
 
 ## Pause States
 
+`awaiting_billing_query`:
+
+- `manifest/billing_mcp_plan.json` freezes every bounded query request;
+- the supervisor calls `recon_db_read_query` once per request;
+- every unchanged response is supplied in chunk order;
+- the runtime verifies environment, run ID, query/parameter hashes, row count,
+  row limit, table identity, and response shape before creating candidates;
+- the request and temporary receipts are disposed after successful resume,
+  retaining only hashes and a sanitized query log.
+
+`awaiting_core_persistence`:
+
+- `manifest/database_persistence_request.json` freezes one hash-bound
+  lifecycle transaction;
+- the supervisor calls `recon_db_persist_run` once;
+- the runtime verifies environment, run ID, payload hash, persisted rows, and
+  persistence manifest before generating reports;
+- the request and temporary receipt are disposed after successful resume,
+  retaining only hashes and committed persistence artifacts.
+
 `awaiting_exception_investigation`:
 
-- the run ID already exists;
-- parsing, billing, matching, persistence, and raw workbook are complete;
-- resume with `--resume-run-root` and `--investigation`;
-- never create another run.
+- unresolved input is frozen;
+- only known line IDs may be returned;
+- resume the same run with the investigation artifact.
 
 `awaiting_publication`:
 
-- report artifacts are complete;
-- native SharePoint upload is pending;
-- resume with `--resume-run-root` and `--publication-receipt`;
-- publication receipt URLs must target the approved site.
+- `manifest/publication_set.json` freezes local paths, relative paths, and
+  checksums;
+- native SharePoint upload and optional source move are pending;
+- create a sanitized native `publication_receipt.json`;
+- re-index and re-download the exact result artifacts through the same MCP
+  index/prepare/fetch flow;
+- resume with every result-space download receipt.
 
-## Failure Codes
-
-Canonical codes:
-
-- `setup_incomplete`
-- `source_not_found`
-- `source_ambiguous`
-- `binary_download_unavailable`
-- `invalid_run_mode_option`
-- `unsafe_archive`
-- `parser_unavailable`
-- `parser_failed`
-- `core_reconciliation_not_available`
-- `billing_query_not_available`
-- `billing_query_not_read_only`
-- `billing_query_scope_invalid`
-- `billing_query_row_limit_exceeded`
-- `core_persistence_not_available`
-- `core_persistence_invalid_input`
-- `investigation_invalid`
-- `publication_invalid`
-- `report_contract_failed`
-- `validation_failed`
-- `notification_failed`
-
-Failure manifests require `run_id` or correlation ID, provider, failed stage, failure code, retryability, sanitized detail, and confirmation that accepted-resolution update was not attempted.
+Completion requires exact equality across publication set, native receipt, and
+MCP re-download paths/checksums.
 
 ## Status Separation
 
-`ReconMatchStatus` belongs to deterministic reconciliation and the raw workbook.
+The raw workbook preserves current `ReconMatchStatus` values. Agent status and
+human verification fields exist only in the refined report.
 
-`agent_match_status` belongs only to the refined workbook. The investigator cannot return `auto_matched`.
-
-`human_verified_status` is written only by a human-review process.
+A parser-only test is not a reconciliation run. It cannot claim customer
+matching, billing comparison, persistence, raw/refined reconciliation
+workbooks, or publication completion.
 
 ## Full-Run Gate
 
-Production reconciliation is permitted only when `preflight_check.py` emits a
-capability manifest with every required script capability enabled and the
-native SharePoint connection separately passes its list, move, and upload
-permission checks. Documentation or script presence is not capability evidence.
+Stop with `core_reconciliation_not_available` when any required capability is
+false. SharePoint Intake MCP must pass capability, probe, index, preparation,
+binary fetch, and result re-download checks. Native SharePoint must separately
+pass move and upload checks. Nexon Recon SQL MCP must pass capability and probe
+checks and advertise read queries plus core persistence when enabled.
 
-A parser-only test is not a reconciliation run. It proves deterministic extraction and source accounting only.
+Equinix one-to-many behavior remains provider evidence, not a reason to weaken
+global cardinality rules.
 
-Equinix one-to-many relationships remain review-required unless the deterministic contract can prove the exact supported allocation.
+## Failure Codes
+
+Representative controlled failures:
+
+- `sharepoint_mcp_required`
+- `sharepoint_mcp_invalid`
+- `intake_preparation_invalid`
+- `intake_preparation_expired`
+- `intake_preparation_disposal_failed`
+- `intake_download_failed`
+- `source_download_receipt_required`
+- `download_receipt_invalid`
+- `source_not_found`
+- `source_ambiguous`
+- `unsafe_archive`
+- `provider_api_not_available`
+- `core_reconciliation_not_available`
+- `investigation_invalid`
+- `publication_invalid`
+
+Failure detail must be sanitized and must never contain preparation content,
+endpoint, ticket, Graph identity, credential, or customer-sensitive SQL
+parameter values.
