@@ -8,12 +8,13 @@ Create these folders only in:
 
 ```text
 Site: Nexon Reconciliation Automation
-Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
-Library: Shared Documents
-Browser URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation/Shared%20Documents/Forms/AllItems.aspx
+Site path: /sites/NexonReconciliationAutomation
+Library: the site's default document library
 ```
 
-Do not create or use these runtime folders in the old personal OneDrive `Recon` folder, the `Account Recon` site, or any other searched/discovered SharePoint location.
+Do not create or use these runtime folders in the personal OneDrive `Recon`
+folder, the `Account Recon` site, or any other searched/discovered SharePoint
+location.
 
 Create upload folders:
 
@@ -41,16 +42,24 @@ Create result roots:
 
 ## Permissions
 
-- Applied/service account can read upload folders.
-- Applied/service account can move/copy uploaded source packages.
-- Applied/service account can create result year/month/run folders.
-- Applied/service account can write reports, evidence, logs, and manifests.
-- Human reviewers can read refined reports and write review copies only in the configured reviewer output location when that workflow is enabled.
+- The native SharePoint connection can list the site and folders, copy/move
+  uploaded packages, create run folders, and upload artifacts.
+- The Fleet SharePoint access-profile application can read the exact site and
+  download binary source content through Graph.
+- The Fleet access-profile application requires `Sites.Selected` with
+  site-level `read`; the profile-backed connector is code-restricted to binary
+  download and verification.
+- The native SharePoint connection separately requires write access for runtime
+  moves and uploads.
 
 ## Secrets And Profiles
 
 - Connect and authorize the native LangSmith SharePoint tool account.
-- Confirm the native SharePoint tool can list, read/stage, upload, and move files in the fixed upload/result spaces.
+- Configure the Fleet SharePoint access profile for the same tenant and grant the
+  application `Sites.Selected` plus site-level `read`.
+- Confirm the native SharePoint tool can list, upload, and move files in the fixed
+  upload/result spaces, and confirm the profile-backed binary connector can
+  download a test ZIP/PDF/XLSX without changing its checksum.
 - Store provider API and DB credentials in the profile secret store or environment secret manager.
 - Do not store secrets in `config/recon_settings.yaml`, prompts, reports, manifests, or logs.
 
@@ -59,7 +68,8 @@ Create result roots:
 Run:
 
 ```text
-python scripts/preflight_check.py --config config/recon_settings.yaml
+python skills/nexon-reconciliation/scripts/resolve_sharepoint_target.py --sites-file <native_list_sites.json> --auth-mode auth_proxy --output <sharepoint_target_binding.json>
+python skills/nexon-reconciliation/scripts/preflight_check.py --config skills/nexon-reconciliation/config/recon_settings.yaml --sharepoint-auth-mode auth_proxy --sharepoint-binding <sharepoint_target_binding.json>
 ```
 
 Expected result:
@@ -71,7 +81,7 @@ Expected result:
 For local or mounted-folder testing only, run:
 
 ```text
-python scripts/preflight_check.py --config config/recon_settings.yaml --local-check
+python skills/nexon-reconciliation/scripts/preflight_check.py --config skills/nexon-reconciliation/config/recon_settings.yaml --local-check
 ```
 
 Expected result:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import csv
+import hashlib
 from collections.abc import Iterable
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -11,6 +12,8 @@ from typing import Any
 
 BASE_HEADERS = [
     "line_id",
+    "invoice_identity",
+    "request_key",
     "run_id",
     "provider",
     "source_file",
@@ -144,12 +147,44 @@ def first_non_empty(row: dict[str, Any], *keys: str) -> str:
 
 def build_result(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
     line_list = list(lines)
+    invoice_headers: dict[str, dict[str, Any]] = {}
+    for line in line_list:
+        identity = str(line.get("invoice_identity", ""))
+        if not identity:
+            raise ValueError("parser_failed: parsed line is missing invoice_identity")
+        header = invoice_headers.setdefault(
+            identity,
+            {
+                "invoice_identity": identity,
+                "request_key": line.get("request_key", ""),
+                "provider": line.get("provider", ""),
+                "provider_account": line.get("provider_account", ""),
+                "invoice_number": line.get("invoice_number", ""),
+                "invoice_date": line.get("invoice_date", ""),
+                "billing_period_start": line.get("billing_period_start", ""),
+                "billing_period_end": line.get("billing_period_end", ""),
+                "currency": line.get("currency", "AUD"),
+                "source_members": [],
+            },
+        )
+        source_file = str(line.get("source_file", ""))
+        if source_file and source_file not in header["source_members"]:
+            header["source_members"].append(source_file)
     headers = list(BASE_HEADERS)
     for line in line_list:
         for key in line:
             if key not in headers:
                 headers.append(key)
-    return {"headers": headers, "lines": line_list}
+    return {
+        "headers": headers,
+        "invoice_headers": list(invoice_headers.values()),
+        "lines": line_list,
+        "accounting": {
+            "source_rows_considered": len(line_list),
+            "parsed_rows": len(line_list),
+            "documented_exclusions": 0,
+        },
+    }
 
 
 def make_line(
@@ -173,17 +208,27 @@ def make_line(
     **extra: Any,
 ) -> dict[str, Any]:
     parsed_amount = parse_money(amount)
+    provider = str(context.get("provider") or "")
+    account = str(provider_account or "")
+    invoice = str(invoice_number or "")
+    identity_seed = f"{provider}|{account}|{invoice}"
+    invoice_identity = hashlib.sha256(identity_seed.encode("utf-8")).hexdigest()[:20]
+    run_id = str(context.get("run_id") or "")
+    if not run_id:
+        raise ValueError("checkFail: run_id is required for stable parser identities.")
     row = {
-        "line_id": f"{context.get('provider', 'provider')}_{line_index:06d}",
-        "run_id": context.get("run_id") or "",
-        "provider": context.get("provider") or "",
+        "line_id": f"{run_id}:{provider}_{line_index:06d}",
+        "invoice_identity": invoice_identity,
+        "request_key": f"{run_id}:request",
+        "run_id": run_id,
+        "provider": provider,
         "source_file": source_file.name,
         "source_row": source_row,
         "source_page_or_sheet": source_page_or_sheet,
-        "provider_account": str(provider_account or ""),
+        "provider_account": account,
         "service_id_raw": str(service_id or ""),
         "service_id_normalized": normalize_service_id(service_id),
-        "invoice_number": str(invoice_number or ""),
+        "invoice_number": invoice,
         "invoice_date": parse_date(invoice_date),
         "billing_period_start": parse_date(billing_period_start),
         "billing_period_end": parse_date(billing_period_end),

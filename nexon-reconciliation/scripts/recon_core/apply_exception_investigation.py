@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from .common import AGENT_MATCH_STATUS_VALUES, APPROVED_REFINED_COLUMNS, read_json, write_json
+from .common import APPROVED_REFINED_COLUMNS, INVESTIGATOR_MATCH_STATUS_VALUES, read_json, write_json
 
 
 AGENT_OUTPUT_COLUMNS = {
@@ -29,20 +29,17 @@ def _line_key(row: dict[str, Any]) -> str:
     line_id = row.get("line_id")
     if line_id:
         return str(line_id)
-    parts = [row.get("run_id"), row.get("provider"), row.get("source_file"), row.get("source_row"), row.get("service_id_raw")]
-    if any(parts):
-        return "|".join(str(part or "") for part in parts)
-    raise RuntimeError("Investigation row is missing line_id and fallback source identity fields.")
+    raise RuntimeError("Investigation row is missing required line_id.")
 
 
 def _validated_update(row: dict[str, Any]) -> dict[str, Any]:
-    disallowed = sorted((set(row) - AGENT_OUTPUT_COLUMNS) - {"line_id", "run_id", "provider", "source_file", "source_row", "service_id_raw"})
+    disallowed = sorted((set(row) - AGENT_OUTPUT_COLUMNS) - {"line_id", "run_id"})
     if disallowed:
         raise RuntimeError(f"Exception investigation included disallowed fields: {disallowed}")
 
     update = {column: row[column] for column in AGENT_OUTPUT_COLUMNS if column in row}
     status = update.get("agent_match_status")
-    if status and status not in AGENT_MATCH_STATUS_VALUES:
+    if status and status not in INVESTIGATOR_MATCH_STATUS_VALUES:
         raise RuntimeError(f"Invalid agent_match_status from exception investigation: {status}")
     if update and not str(update.get("agent_evidence_summary", "")).strip():
         raise RuntimeError("Exception investigation update requires agent_evidence_summary.")

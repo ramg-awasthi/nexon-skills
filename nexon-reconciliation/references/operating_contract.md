@@ -1,114 +1,135 @@
 # Runtime Operating Contract
 
-## Scope
+## Run States
 
-The runtime supports:
+Valid run states:
 
-- Manual SharePoint upload intake.
-- Provider API intake where credentials/endpoints exist.
-- AAPT, Telstra, Optus, Vocus, Megaport, Equinix.
-- ZIP and multi-file handling.
-- Deterministic provider parsing through approved provider adapters.
-- Read-only billing lookup for normal reconciliation.
-- Deterministic matching.
-- Agent-assisted exception investigation.
-- Raw and refined reports.
-- Run manifests, logs, and evidence.
+- `created`
+- `running`
+- `completed`
+- `failed`
 
-Supported parser inputs are AAPT ZIP, Telstra CSV, Optus PDF, Optus voice ZIP/DAT, Vocus CSV, Megaport CSV, and Equinix XLSX. A normal run must stop with `parser_unavailable` when required parser libraries are unavailable, the package is malformed, or the selected source format is unsupported.
+Valid stage states:
 
-Normal reconciliation requires billing evidence. If read-only billing lookup is disabled or unavailable, stop with `billing_query_not_available`; parser-only validation is not a full reconciliation run and must not produce customer-match reports.
+- `pending`
+- `running`
+- `completed`
+- `failed`
+- `skipped`
 
-## Not Allowed By Default
+`completed` is terminal and requires validation. `failed` is terminal. A run awaiting exception investigation or publication remains `running`, with the corresponding stage set to `running`.
 
-- Automatic DB update.
-- Business Central posting.
-- PowerBI/Fabric publishing.
-- Replacement/retirement of current Logic Apps.
-- Free-form invoice parsing.
-- Arbitrary SQL.
-- Legacy/disabled workflow support unless separately approved.
+## Stage Order
 
-## Folder Contract
+1. `source_staging`
+2. `run_creation`
+3. `archive_validation`
+4. `provider_parsing`
+5. `billing_preparation`
+6. `deterministic_comparison`
+7. `supplier_persistence`
+8. `result_persistence`
+9. `raw_workbook`
+10. `exception_investigation`
+11. `refined_workbook`
+12. `publication`
+13. `validation`
+14. `notification`
 
-Production folders live only in the dedicated SharePoint site:
+Every stage records attempts, timestamps, counts, artifact paths, status, failure code, and retryability in `manifest/run_state.json`.
 
-```text
-Site: Nexon Reconciliation Automation
-Site URL: https://nexonap.sharepoint.com/sites/NexonReconciliationAutomation
-Library: Shared Documents
-```
+## Required Artifacts
 
-The old personal OneDrive `Recon` folder and the previously discovered `Account Recon` site are not runtime targets. Do not read from or write to them during normal runs unless the user explicitly approves an investigation.
+Every run:
 
-Users upload to:
+- `manifest/run_manifest.json`
+- `manifest/run_state.json`
+- `manifest/audit_manifest.json`
+- `manifest/unpack_manifest.json`
+- `manifest/parser_manifest.json`
+- `logs/parser_warnings.json`
+- `normalized/provider_lines.json`
 
-```text
-/recon-upload-space/<provider>/
-```
+Reconciliation:
 
-Runs write to:
+- `evidence/billing_candidates.json`
+- `logs/billing_query_log.json`
+- `normalized/match_results.json`
+- `manifest/persistence_manifest.json`
+- `normalized/persisted_match_results.json`
+- `raw-recon-report/raw-reconciliation.xlsx`
+- `manifest/report_manifest.json`
 
-```text
-/recon-result-space/<provider>/<year>/<month>/<run_id>/
-```
+When unresolved rows exist:
 
-Run folders include:
+- `evidence/exception_input.json`
+- `evidence/exception_investigation.json`
+- `normalized/final_match_results.json`
+- `refined-recon-report/refined-reconciliation.xlsx`
 
-```text
-source/
-extracted/
-normalized/
-raw-recon-report/
-refined-recon-report/
-evidence/
-logs/
-manifest/
-```
+Fleet publication:
 
-Root upload/result spaces are one-time setup.
+- `manifest/publication_set.json`
+- `manifest/publication_receipt.json`
 
-If a normal run cannot confirm folders, resolve a single source package, unpack safely, parse deterministically, or run approved read-only billing evidence queries, it records a controlled failure manifest and stops. It does not continue by guessing.
+## Pause States
 
-## Report Columns
+`awaiting_exception_investigation`:
 
-The refined report must preserve every raw/report field produced by the parser and matcher, then append the approved runtime columns below. Raw fields must not be dropped just because the refined report adds agent or human review fields.
+- the run ID already exists;
+- parsing, billing, matching, persistence, and raw workbook are complete;
+- resume with `--resume-run-root` and `--investigation`;
+- never create another run.
 
-Do not remove base fields.
+`awaiting_publication`:
 
-The raw report is generated from pre-investigation deterministic match rows. The refined report is generated from post-investigation final match rows.
+- report artifacts are complete;
+- native SharePoint upload is pending;
+- resume with `--resume-run-root` and `--publication-receipt`;
+- publication receipt URLs must target the approved site.
 
-`agent_evidence_summary` must stay short and single-line. `reports.evidence_summary.auto_matched` controls deterministic auto-match rows only: `short` writes compact evidence, while `blank` allows blank evidence for `auto_matched` rows. Review, exception, parser-warning, no-match, and multi-match rows still require a short evidence summary.
+## Failure Codes
 
-Approved refined added columns:
+Canonical codes:
 
-- `agent_match_status`
-- `agent_match_rule`
-- `agent_suggested_customer_account`
-- `agent_suggested_subscription_id`
-- `agent_suggested_invoice_number`
-- `agent_suggested_service_id`
-- `agent_evidence_summary`
-- `agent_review_required`
-- `human_verified_status`
-- `human_verified_by`
-- `human_verified_at`
-- `human_verified_invoice_number`
+- `setup_incomplete`
+- `source_not_found`
+- `source_ambiguous`
+- `binary_download_unavailable`
+- `invalid_run_mode_option`
+- `unsafe_archive`
+- `parser_unavailable`
+- `parser_failed`
+- `core_reconciliation_not_available`
+- `billing_query_not_available`
+- `billing_query_not_read_only`
+- `billing_query_scope_invalid`
+- `billing_query_row_limit_exceeded`
+- `core_persistence_not_available`
+- `core_persistence_invalid_input`
+- `investigation_invalid`
+- `publication_invalid`
+- `report_contract_failed`
+- `validation_failed`
+- `notification_failed`
 
-Excluded from the refined report schema:
+Failure manifests require `run_id` or correlation ID, provider, failed stage, failure code, retryability, sanitized detail, and confirmation that accepted-resolution update was not attempted.
 
-- `agent_confidence_score`
-- `agent_reason_code`
-- `agent_notes`
+## Status Separation
 
-## Human Verification Semantics
+`ReconMatchStatus` belongs to deterministic reconciliation and the raw workbook.
 
-`human_verified_status=verified` means the reviewer is asserting a complete match. It requires `human_verified_invoice_number`.
+`agent_match_status` belongs only to the refined workbook. The investigator cannot return `auto_matched`.
 
-`human_verified_status=deferred` means the reviewer is preserving a partial/incomplete review state. It may leave `human_verified_invoice_number` blank in the report. Deferred rows are report-only in the current runtime and are not eligible for a future DB update unless Nexon separately approves explicit update semantics for blank-invoice deferred rows.
+`human_verified_status` is written only by a human-review process.
 
-`human_verified_status=not_reviewed` is report-only and should not produce a DB update row.
+## Full-Run Gate
 
-## Provider-Specific Matching Rules
+Production reconciliation is permitted only when `preflight_check.py` emits a
+capability manifest with every required script capability enabled and the
+native SharePoint connection separately passes its list, move, and upload
+permission checks. Documentation or script presence is not capability evidence.
 
-Equinix one-to-many candidates remain review-only. The parser may extract deterministic supplier invoice lines, but matching must not auto-allocate one supplier invoice line across multiple customer services.
+A parser-only test is not a reconciliation run. It proves deterministic extraction and source accounting only.
+
+Equinix one-to-many relationships remain review-required unless the deterministic contract can prove the exact supported allocation.

@@ -25,12 +25,16 @@ def main() -> int:
     now = datetime.now(ZoneInfo(config.get("timezone", "Australia/Sydney"))).isoformat()
     payload = {
         "status": "failed",
+        "run_id": args.run_root.name if args.run_root else None,
+        "correlation_id": args.run_root.name if args.run_root else f"{args.provider}:{now}",
         "provider": args.provider,
-        "stage": args.stage,
-        "reason": args.reason,
+        "failed_stage": args.stage,
+        "failure_code": args.reason,
+        "sanitized_detail": args.reason,
+        "retryable": False,
         "recorded_at": now,
         "source_file": args.source_file,
-        "db_update_attempted": False,
+        "accepted_resolution_update_attempted": False,
         "notification_required": notifications_enabled and notify_operator,
         "notification_sent": False,
     }

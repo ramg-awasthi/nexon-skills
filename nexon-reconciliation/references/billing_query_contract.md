@@ -1,96 +1,74 @@
 # Billing Query Contract
 
-Use this reference when enabling read-only Inomial/reconciliation billing lookup.
+Use only the approved reconciliation database through a read-only identity. Direct Inomial PostgreSQL requires separate approval.
 
-## Billing Source Boundary
+## Mandatory Configuration
 
-Use only approved read-only billing sources for runtime lookup.
-
-Approved runtime source order:
-
-1. Reconciliation database tables populated from Inomial daily extracts.
-2. Direct Inomial PostgreSQL only when Nexon supplies approved read-only credentials.
-
-Known extract table names include `inomialServiceMetaData` and `inomialTransactionData`. Matching evidence should use service ID, carrier/provider, and billing period/date fields when available.
-
-## Runtime Contract
-
-`scripts/billing_query.py` is the only runtime billing lookup script.
-
-It must:
-
-- use `features.billing_query_enabled=true`;
-- use `billing.mode=read_only_sql`;
-- use `billing.agent_sql_allowed=true`;
-- accept run-scoped agent-prepared SQL through `--sql-file` or `--sql`;
-- reject non-read-only SQL before execution;
-- execute with read-only credentials;
-- write candidate evidence only;
-- always write a query log;
-- never write to the database.
-
-## Query SQL
-
-The supervisor or exception investigator may prepare read-only SQL for the current run. Prefer a run-scoped SQL file under `evidence/` and pass it with `--sql-file`.
-
-SQL should use named parameters derived from normalized invoice rows:
-
-```sql
-:provider
-:service_id
-:service_id_raw
-:service_id_normalized
-:provider_account
-:invoice_number
-:billing_period_start
-:billing_period_end
+```yaml
+billing:
+  mode: read_only_sql
+  agent_sql_allowed: true
+  audit_required: true
 ```
 
-The script converts named parameters for PostgreSQL when `NEXON_RECON_BILLING_MODE=postgres`.
+`features.billing_query_enabled` must also be true.
 
-Allowed SQL shape:
+## Execution Boundary
 
-- one statement only;
-- starts with `SELECT` or `WITH`;
-- no write/admin tokens such as `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `DROP`, `ALTER`, `TRUNCATE`, `GRANT`, `REVOKE`, `CALL`, `EXECUTE`, or `INTO`.
+`scripts/billing_query.py` is the only billing lookup command.
 
-The adapter still relies on read-only credentials as a second guardrail. The SQL shape check protects against accidental unsafe SQL but is not a substitute for read-only database roles.
+It enforces:
 
-## Billing Evidence Output
+- one `SELECT` or `WITH`;
+- approved schema-qualified tables;
+- no write, DDL, admin, execution, copy, or `SELECT INTO`;
+- named parameters;
+- configured timeout and row cap;
+- provider/account/period grouping;
+- configured rows per chunk;
+- one sanitized query log record per chunk.
 
-The query output should return as many of these columns as possible:
+Supported runtime modes:
 
-- `candidate_id`
-- `customer_account`
-- `subscription_id`
-- `service_id`
-- `circuit_id`
-- `carrier_service_id`
-- `line_number`
-- `carrier_name`
-- `service_provider`
-- `provider_account`
-- `customer_invoice_number`
-- `transaction_date`
-- `charge_start`
-- `ledger_date`
-- `creation_time`
-- `customer_invoice_amount`
-- `service_id_match`
-- `provider_match`
-- `billing_period_match`
-- `conflicting_candidate`
-- `one_to_many`
+- `sqlite` for local fixtures;
+- `sqlserver` or `azure_sql` for the reconciliation database;
+- approved PostgreSQL mode only as a separate integration.
 
-If the boolean evidence fields are not returned, `billing_query.py` derives conservative match evidence from returned service/provider/date fields.
+## Chunk Parameters
 
-## Connection Modes
+The command owns these scope parameters:
 
-Supported modes:
+```text
+:provider
+:provider_account
+:billing_period_start
+:billing_period_end
+:service_ids_json
+```
 
-- `NEXON_RECON_BILLING_MODE=sqlite` for local fixture tests.
-- `NEXON_RECON_BILLING_MODE=postgres` for direct PostgreSQL/Inomial-style access.
+The supplied query must project canonical `provider`, `provider_account`, `transaction_date`, and `service_id` fields. The command wraps it with provider/account/period/service filtering, using `OPENJSON(:service_ids_json)` for Azure SQL or the runtime-equivalent JSON expansion. Do not concatenate identifiers into SQL.
 
-Set `NEXON_RECON_BILLING_DSN` in the runtime profile. Do not store DSNs or passwords in prompts, docs, logs, manifests, or reports.
+The query must return a service identifier such as `service_id`, `carrier_service_id`, `circuit_id`, or `line_number` so results can be assigned back to known invoice rows. Project a stable source identity as `candidate_id` whenever the source exposes one, such as a transaction UUID or existing billing-row ID. If absent, the tool derives a deterministic content hash; it never uses a line-local sequence as identity.
 
-Query logs include billing mode, SQL source, SQL hash, read-only validation status, populated parameter keys, short SHA-256 hashes of populated parameter values, row count, and duration. They must not log raw billing/customer parameters or raw SQL text.
+## Approved Tables
+
+- `dbo.inomialServiceMetaData`
+- `dbo.inomialTransactionData`
+- `Finance.inomialServiceMetaData`
+- `Finance.inomialTransactionData`
+- `Finance.GenericNexonBilling`
+- `Finance.BillingSystem`
+- `Finance.ServiceProvider`
+- `Finance.ServiceProviderAccount`
+
+Queries referencing other tables fail closed until code ownership explicitly approves them.
+
+## Candidate Output
+
+Return only fields required to evaluate service, provider, account, invoice, date, subscription, customer, amount, and conflict evidence. Never return credentials or secret-bearing columns.
+
+The runtime converts results into `candidates_by_line` and derives conservative boolean evidence. Query logs contain SQL hash, parameter-key metadata, parameter-value hashes, duration, row count, row limit, and timeout. They never contain raw SQL parameters.
+
+## Investigator Loop
+
+The investigator may propose an additional read-only query but cannot execute it. The supervisor validates and executes it through this command with `--exception-input`, `--line-ids-file`, `--query-round`, and `--query-budget`, then returns candidates and query-log identity. The line IDs must be a known unresolved subset. Query rounds are sequential, appended to the same audit log, and bounded by the configured limit.

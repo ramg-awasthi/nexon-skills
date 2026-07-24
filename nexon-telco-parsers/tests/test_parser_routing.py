@@ -23,12 +23,16 @@ class ParserRoutingTests(unittest.TestCase):
     def test_optus_pdf_uses_pdf_route(self) -> None:
         self.assertEqual("optus_pdf", select_parser("Optus", [Path("invoice.pdf")]))
 
-    def test_optus_excel_or_voice_uses_excel_voice_route(self) -> None:
-        self.assertEqual("optus_excel_voice", select_parser("Optus", [Path("invoice.xlsx")]))
+    def test_optus_voice_uses_excel_voice_route(self) -> None:
+        self.assertEqual("optus_excel_voice", select_parser("Optus", [Path("invoice.dat")]))
+
+    def test_optus_unsupported_file_fails(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported Optus package"):
+            select_parser("Optus", [Path("invoice.xlsx")])
 
     def test_optus_mixed_package_is_ambiguous(self) -> None:
         with self.assertRaises(ValueError):
-            select_parser("Optus", [Path("invoice.pdf"), Path("voice.xlsx")])
+            select_parser("Optus", [Path("invoice.pdf"), Path("voice.dat")])
 
     def test_optus_empty_package_fails_before_branch_selection(self) -> None:
         with self.assertRaisesRegex(ValueError, "no source files"):
