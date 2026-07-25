@@ -1,46 +1,44 @@
 ---
 name: nexon-m365-graph-execution
-description: Perform the Microsoft side of one ticket-bound Nexon M365 request through controlled preflight, claimed execution, or verification-only handling. Use when the fixed m365-execution subagent must determine conditional risk, validate a bounded execution envelope, authenticate to the tenant_id supplied by the authoritative CMDB workflow, invoke one immutable-registry handler, verify the end state, or return sanitized evidence.
+description: Use the approved Nexon M365 Graph MCP for bounded tenant verification, operation preflight, gated execution, and operation verification. Remediation is disabled by default and never autonomous.
 ---
 
 # Nexon M365 Graph Execution
 
-Process one bounded Microsoft request in `preflight`, `execute`, or `verify_only` mode. Do not interpret ServiceNow approval or update ServiceNow records.
+Process one bounded Microsoft `tenant_verify`, `preflight`, `execute_explicit`, or `verify_operation` request. Do not interpret ServiceNow approval or update ServiceNow records. Never call Graph directly. The generic execute tool is permanently fail closed; a remediation attempt may use only the matching explicit operation MCP tool.
 
 ## Load the required references
 
-- Read [execution-envelope-contract.md](references/execution-envelope-contract.md) before accepting input or returning a result.
-- Read [operation-contract.md](references/operation-contract.md) before resolving a target, determining risk, authenticating, invoking a handler, or verifying state.
-- Read the immutable [operation-registry.json](references/operation-registry.json) only through the deterministic validator and dispatcher.
+- Read [operation-contract.md](references/operation-contract.md) for the MCP lifecycle boundary and blocked operation rules.
+- Treat [operation-registry.json](references/operation-registry.json) as agent-readable business scope only. The MCP server's immutable registry is authoritative for execution.
 
-These links define the agent-readable source contracts. For computer execution, use only the released copy under `/opt/nexon-m365-skills/skills/nexon-m365-graph-execution`. Never execute supporting resources from the agent-memory skill mount.
+These links define the agent-readable source contracts. Microsoft credentials, token acquisition, tenant allowlisting, Graph calls, and auditing are owned by the MCP service.
 
 ## Enforce the execution boundary
 
-1. Accept only the bounded structure defined by the execution-envelope contract.
-2. Reject raw ticket text, approval prose, credentials, commands, arbitrary URLs, request bodies, multiple targets, multiple operations, and unknown fields.
-3. Validate the envelope with `python /opt/nexon-m365-skills/skills/nexon-m365-graph-execution/scripts/validate_execution_envelope.py`, providing the bounded JSON object on stdin, before Microsoft authentication. If the fixed runtime file is absent, return `DEPENDENCY_UNAVAILABLE`; do not copy or recreate it.
-4. In `preflight` mode, perform read-only target, state, and conditional-risk checks. Never write.
-5. In `execute` mode, require the approved plan fingerprint, approval-entry ID, attempt ID, correlation ID, and ServiceNow execution-claim binding fields.
-6. Authenticate the approved multi-tenant application to the CMDB tenant GUID.
-7. Confirm the connected Graph tenant and organization match the CMDB tenant before a write.
-8. Resolve exactly one target and query the normalized starting state.
-9. Invoke exactly one complete handler from the immutable registry.
-10. Independently query and compare the ending state.
-11. In `verify_only` mode, perform no write under any condition.
-12. Clear the process-scoped Microsoft authentication context in a guaranteed cleanup path.
-13. Return only the sanitized structured result defined by the execution-envelope contract, preserving every request-binding field.
+1. For `tenant_verify`, accept only the strict tenant-verification request envelope with the authoritative `cmdb_tenant_id`.
+2. For operation modes, accept only the bounded fields required by the MCP tool contract. For `preflight`, require either `mode=planning` or `mode=execution_binding`; do not blend the two payloads.
+3. Reject raw ticket text, approval prose, credentials, commands, URLs, raw Graph request bodies, multiple targets, multiple operations, and unknown fields.
+4. Call `m365_graph_get_capabilities`.
+5. Require service `nexon-m365-graph-mcp`, the expected environment, `autonomous_remediation=false`, `generic_execute_production_allowed=false`, `future_write_tool_model=explicit_per_operation_tools`, all five lifecycle tools, and all eight registry-declared explicit operation tools.
+6. Call `m365_graph_verify_tenant` with the same bounded request ID and CMDB tenant GUID.
+7. Require `status=verified`, `onboarded=true`, `tenant_matched=true`, and matching CMDB, token-tenant, and organization GUIDs.
+8. For planning preflight, call `m365_graph_preflight_operation` with `mode=planning` and return only the bounded plan fingerprint and safe result.
+9. For execution-binding preflight, call `m365_graph_preflight_operation` with `mode=execution_binding` and return only the bounded execution binding and safe result.
+10. For `execute_explicit`, require the exact execution binding, immutable approval evidence, signed atomic claim identity, fresh tenant-assertion binding, environment write gate, environment enabled-operation entry, tenant allowlist entry, and implemented/enabled immutable registry entry. Call only the registry-matched explicit operation tool. Never call `m365_graph_execute_operation` for remediation.
+11. For `verify_operation`, call `m365_graph_verify_operation` and return only bounded verification evidence.
 
-Use controlled Python handlers with fixed Microsoft identity and Graph REST constants. Do not use PowerShell, the Microsoft Graph PowerShell SDK, caller-supplied hosts, or caller-supplied Graph URLs.
+Do not use direct Microsoft identity or Graph REST, the Fleet computer, an Access profile, a workspace credential, PowerShell, Python, or shell as a fallback.
 
 ## Enforce mode restrictions
 
-- `preflight`: read-only; return target, state, and risk evidence.
-- `execute`: allow at most one bounded write after every deterministic gate passes.
-- `verify_only`: read-only recovery after an uncertain write; never retry or correct the write.
+- `tenant_verify`: read-only capability and tenant verification only.
+- `preflight`: read-only lifecycle binding only; `planning` and `execution_binding` are separate strict schemas.
+- `execute_explicit`: one registry-matched explicit operation tool, server-disabled by default, never autonomous.
+- `verify_operation`: read-only independent end-state verification.
 
 ## Fail closed
 
-The executable registry is currently empty. Return `UNSUPPORTED_OPERATION` before authentication or write until a complete operation handler is approved, registered, and tested.
+Return the MCP's stable fail-closed code when the write gate is disabled, the tenant does not allow the operation, the server registry does not mark the operation implemented/enabled, or operation-specific rules remain unresolved. Do not downgrade these blocked states into success.
 
-Never modify the registry, scripts, skills, subagent instructions, tools, computer configuration, credentials, or memory during an operational run.
+Never modify the registry, skills, subagent instructions, tools, MCP connections, credentials, or memory during an operational run.

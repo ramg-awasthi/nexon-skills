@@ -23,6 +23,9 @@ complete_m365_ticket(table, id, outcome, resolution_fields, correlation_id, veri
 get_m365_automation_state(table, id)
 set_m365_automation_state(table, id, expected_version, state_payload)
 claim_m365_execution(table, id, expected_version, plan_fingerprint, approval_entry_id, attempt_id, correlation_id, lease_expires_at)
+consume_m365_execution_claim(table, id, claim_id, expected_version, attempt_id, execution_binding_id)
+mark_m365_write_started(table, id, claim_id, expected_version, attempt_id, started_at)
+recover_m365_execution(table, id, claim_id, expected_version, observed_outcome)
 ```
 
 If a required capability is unavailable, return a safe blocked result. Do not replace it with an unapproved Table API, browser action, or arbitrary request.
@@ -40,6 +43,13 @@ Require the MCP to:
 - Exclude credentials, OAuth tokens, cookies, and authorization headers.
 - Enforce optimistic concurrency on automation state.
 - Atomically acquire the execution claim before Microsoft authentication and reject a stale expected version.
+- At the deterministic write boundary, atomically validate and consume the
+  signed claim once and persist `write_started` before dispatch. The consume
+  operation must reject replay, expiry, lease mismatch, attempt mismatch,
+  execution-binding mismatch, and stale record version.
+- After `write_started`, allow only verification-only recovery. A crash or
+  unknown write outcome must never make the attempt claimable for a second
+  write.
 - Return an explicit `automation_enabled`/onboarding value with the tenant mapping.
 - Enforce bounded work-note length and reject secret-like or credential-bearing work-note input server-side.
 
