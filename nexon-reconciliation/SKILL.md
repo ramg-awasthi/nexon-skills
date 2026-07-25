@@ -41,7 +41,7 @@ to `nexon-recon-exception-investigator`.
 ```text
 Site: Nexon Reconciliation Automation
 Upload: /recon-upload-space/<provider>/
-Reference: /recon-reference-space/<provider>/
+Reference: /recon-reference-space/sample-invoices/<provider>/
 Result: /recon-result-space/<provider>/<yyyy>/<MM>/<run_id>/
 ```
 
@@ -63,6 +63,9 @@ For `manual_upload`:
 1. Call `recon_sp_get_capabilities` and `recon_sp_probe`.
 2. Call `recon_sp_index_sources` for `upload`, or `reference` only for an
    explicit `parser_validation` test.
+   If a reference index returns `status=sharepoint_folder_not_found`, stop
+   cleanly as `source_not_found`. Do not create the folder, retry it as a
+   connectivity failure, or send a failure notification.
 3. Apply only explicit provider, filename, selection, or all-file constraints.
 4. Stop on no match. Ask the user to select when multiple sanitized candidates
    remain. Do not rank candidates.

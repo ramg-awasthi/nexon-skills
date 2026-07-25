@@ -142,3 +142,8 @@ Representative controlled failures:
 Failure detail must be sanitized and must never contain preparation content,
 endpoint, ticket, Graph identity, credential, or customer-sensitive SQL
 parameter values.
+
+For reference-only parser validation, SharePoint Intake MCP
+`status=sharepoint_folder_not_found` maps to `source_not_found`. It is an
+optional fixture gap, not a connectivity failure, and must not trigger folder
+creation or failure notification.

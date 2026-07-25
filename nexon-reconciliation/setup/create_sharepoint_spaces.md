@@ -6,11 +6,11 @@ On the dedicated `Nexon Reconciliation Automation` site, create:
 
 ```text
 /recon-upload-space/
-/recon-reference-space/
+/recon-reference-space/sample-invoices/
 /recon-result-space/
 ```
 
-Create provider folders under each root:
+Create provider folders under the upload and result roots:
 
 ```text
 AAPT
@@ -20,6 +20,11 @@ Vocus
 Megaport
 Equinix
 ```
+
+Reference provider folders are optional and should exist only when a fixture is
+onboarded for that provider. Do not create empty reference folders merely to
+satisfy parser validation; the SharePoint Intake MCP reports the missing
+fixture folder cleanly.
 
 Do not reuse a personal OneDrive folder, the historical `Recon` tree, or
 another business site.
@@ -77,7 +82,8 @@ python skills/nexon-reconciliation/scripts/preflight_check.py \
   --output <runtime_capabilities.json>
 ```
 
-4. Put one harmless fixture in each provider reference folder.
+4. For each provider being validated, onboard one harmless fixture in its
+   reference folder. Providers without fixtures are skipped cleanly.
 5. Use `recon_sp_prepare_reference_test` and
    `fetch_intake_artifact.py` to prove ZIP/PDF/XLSX binary integrity without
    moving or modifying the fixture.
