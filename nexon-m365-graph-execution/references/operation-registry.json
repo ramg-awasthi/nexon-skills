@@ -1,4 +1,701 @@
 {
-  "schema_version": 1,
-  "operations": {}
+  "canonical_operation_names": [
+    "assign_group",
+    "assign_license",
+    "create_user",
+    "disable_user",
+    "enable_user",
+    "grant_admin_role",
+    "remove_license",
+    "reset_password"
+  ],
+  "future_write_tool_model": "explicit_per_operation_tools",
+  "generated_from": "nexon-mcp/services/m365-graph/src/nexon_m365_graph_mcp/registry.py",
+  "generic_execute_production_allowed": false,
+  "operations": {
+    "assign_group": {
+      "blocked_reason": "operation_not_enabled_in_environment",
+      "duplicate_behavior": "already_member_is_verified_noop",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_assign_group",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "GroupMember.ReadWrite.All"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id",
+        "parameters.group_id"
+      ],
+      "implemented": true,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "direct_member": {
+            "const": true,
+            "title": "Direct Member",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "direct_member"
+        ],
+        "title": "AssignGroupIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "group_has_hidden_membership": {
+            "const": false,
+            "title": "Group Has Hidden Membership",
+            "type": "boolean"
+          },
+          "group_id": {
+            "title": "Group Id",
+            "type": "string"
+          },
+          "group_is_role_assignable": {
+            "const": false,
+            "title": "Group Is Role Assignable",
+            "type": "boolean"
+          },
+          "side_effect_evidence_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Side Effect Evidence Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_id",
+          "group_is_role_assignable",
+          "group_has_hidden_membership",
+          "side_effect_evidence_id"
+        ],
+        "title": "AssignGroupParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "non_role_assignable_group_evidence",
+        "no_access_or_license_side_effects",
+        "uat_test_user_and_group"
+      ],
+      "read_permissions": [
+        "User.Read.All",
+        "GroupMember.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "deferred",
+      "supplied_risk_levels": [
+        "standard",
+        "high"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "assign_license": {
+      "blocked_reason": "operation_not_enabled_in_environment",
+      "duplicate_behavior": "already_assigned_is_verified_noop",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_assign_license",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "LicenseAssignment.ReadWrite.All"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id",
+        "parameters.sku_id"
+      ],
+      "implemented": true,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "direct_assignment_present": {
+            "const": true,
+            "title": "Direct Assignment Present",
+            "type": "boolean"
+          },
+          "disabled_plan_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Disabled Plan Ids",
+            "type": "array"
+          },
+          "sku_id": {
+            "title": "Sku Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direct_assignment_present",
+          "sku_id"
+        ],
+        "title": "AssignLicenseIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "disabled_plan_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Disabled Plan Ids",
+            "type": "array"
+          },
+          "sku_catalog_evidence_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Sku Catalog Evidence Id",
+            "type": "string"
+          },
+          "sku_id": {
+            "title": "Sku Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku_id",
+          "sku_catalog_evidence_id"
+        ],
+        "title": "AssignLicenseParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "approved_sku_mapping",
+        "direct_vs_group_license_policy"
+      ],
+      "read_permissions": [
+        "User.Read.All",
+        "LicenseAssignment.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "deferred",
+      "supplied_risk_levels": [
+        "standard"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "create_user": {
+      "blocked_reason": "initial_credential_delivery_unapproved",
+      "duplicate_behavior": "verify_exact_existing_object_or_stop_inconclusive",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_create_user",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "User.Create"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.identifier"
+      ],
+      "implemented": false,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_enabled": {
+            "title": "Account Enabled",
+            "type": "boolean"
+          },
+          "created": {
+            "const": true,
+            "title": "Created",
+            "type": "boolean"
+          },
+          "display_name": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "mail_nickname": {
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Mail Nickname",
+            "type": "string"
+          },
+          "user_principal_name": {
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "User Principal Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "created",
+          "user_principal_name",
+          "display_name",
+          "mail_nickname",
+          "account_enabled"
+        ],
+        "title": "CreateUserIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_enabled": {
+            "title": "Account Enabled",
+            "type": "boolean"
+          },
+          "credential_delivery_reference": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Credential Delivery Reference",
+            "type": "string"
+          },
+          "display_name": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "immutable_create_key": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Immutable Create Key",
+            "type": "string"
+          },
+          "mail_nickname": {
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Mail Nickname",
+            "type": "string"
+          },
+          "user_principal_name": {
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "User Principal Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "immutable_create_key",
+          "user_principal_name",
+          "display_name",
+          "mail_nickname",
+          "account_enabled",
+          "credential_delivery_reference"
+        ],
+        "title": "CreateUserParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "safe_initial_credential_delivery",
+        "immutable_create_identifier"
+      ],
+      "read_permissions": [
+        "User.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "blocked",
+      "supplied_risk_levels": [
+        "standard"
+      ],
+      "target_lifecycle": "create",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "disable_user": {
+      "blocked_reason": "operation_not_enabled_in_environment",
+      "duplicate_behavior": "already_disabled_is_verified_noop",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_disable_user",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "User.EnableDisableAccount.All",
+        "User.Read.All"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id"
+      ],
+      "implemented": true,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_enabled": {
+            "const": false,
+            "title": "Account Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account_enabled"
+        ],
+        "title": "DisabledUserIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "policy_evidence_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Policy Evidence Id",
+            "type": "string"
+          },
+          "privileged_account": {
+            "title": "Privileged Account",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "privileged_account",
+          "policy_evidence_id"
+        ],
+        "title": "AccountStateParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "privileged_account_evidence",
+        "break_glass_exclusion_policy",
+        "sensitive_action_application_admin_role"
+      ],
+      "read_permissions": [
+        "User.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "deferred",
+      "supplied_risk_levels": [
+        "high"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "enable_user": {
+      "blocked_reason": "operation_not_enabled_in_environment",
+      "duplicate_behavior": "already_enabled_is_verified_noop",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_enable_user",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "User.EnableDisableAccount.All",
+        "User.Read.All"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id"
+      ],
+      "implemented": true,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "account_enabled": {
+            "const": true,
+            "title": "Account Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account_enabled"
+        ],
+        "title": "EnabledUserIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "policy_evidence_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Policy Evidence Id",
+            "type": "string"
+          },
+          "privileged_account": {
+            "title": "Privileged Account",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "privileged_account",
+          "policy_evidence_id"
+        ],
+        "title": "AccountStateParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "reactivation_policy",
+        "privileged_account_evidence",
+        "sensitive_action_application_admin_role"
+      ],
+      "read_permissions": [
+        "User.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "deferred",
+      "supplied_risk_levels": [
+        "standard"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "grant_admin_role": {
+      "blocked_reason": "privileged_role_rule_unapproved",
+      "duplicate_behavior": "already_member_is_verified_noop_only_after_policy_approval",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_grant_admin_role",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "RoleManagement.ReadWrite.Directory"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id",
+        "parameters.role_definition_id"
+      ],
+      "implemented": true,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_present": {
+            "const": true,
+            "title": "Assignment Present",
+            "type": "boolean"
+          },
+          "directory_scope_id": {
+            "maxLength": 255,
+            "pattern": "^/[A-Za-z0-9/._:-]{0,254}$",
+            "title": "Directory Scope Id",
+            "type": "string"
+          },
+          "role_definition_id": {
+            "title": "Role Definition Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignment_present",
+          "role_definition_id",
+          "directory_scope_id"
+        ],
+        "title": "GrantAdminRoleIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "directory_scope_id": {
+            "maxLength": 255,
+            "pattern": "^/[A-Za-z0-9/._:-]{0,254}$",
+            "title": "Directory Scope Id",
+            "type": "string"
+          },
+          "privileged_policy_evidence_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Privileged Policy Evidence Id",
+            "type": "string"
+          },
+          "role_definition_id": {
+            "title": "Role Definition Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role_definition_id",
+          "directory_scope_id",
+          "privileged_policy_evidence_id"
+        ],
+        "title": "GrantAdminRoleParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "privileged_role_policy",
+        "pim_or_permanent_assignment_decision"
+      ],
+      "read_permissions": [
+        "RoleManagement.Read.Directory",
+        "User.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "blocked",
+      "supplied_risk_levels": [
+        "high"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "remove_license": {
+      "blocked_reason": "data_bearing_license_rule_unapproved",
+      "duplicate_behavior": "already_removed_is_verified_noop",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_remove_license",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "LicenseAssignment.ReadWrite.All"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id",
+        "parameters.sku_id"
+      ],
+      "implemented": true,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "direct_assignment_present": {
+            "const": false,
+            "title": "Direct Assignment Present",
+            "type": "boolean"
+          },
+          "sku_id": {
+            "title": "Sku Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direct_assignment_present",
+          "sku_id"
+        ],
+        "title": "RemoveLicenseIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "data_impact_classification": {
+            "enum": [
+              "non_data_bearing",
+              "data_bearing"
+            ],
+            "title": "Data Impact Classification",
+            "type": "string"
+          },
+          "impact_evidence_id": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Impact Evidence Id",
+            "type": "string"
+          },
+          "sku_id": {
+            "title": "Sku Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku_id",
+          "data_impact_classification",
+          "impact_evidence_id"
+        ],
+        "title": "RemoveLicenseParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "data_bearing_license_policy",
+        "mailbox_deprovisioning_evidence"
+      ],
+      "read_permissions": [
+        "User.Read.All",
+        "LicenseAssignment.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "blocked",
+      "supplied_risk_levels": [
+        "standard",
+        "high"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    },
+    "reset_password": {
+      "blocked_reason": "reset_password_secret_delivery_unapproved",
+      "duplicate_behavior": "blocked_no_duplicate_behavior_approved",
+      "enabled_by_default": false,
+      "future_production_tool": "m365_graph_reset_password",
+      "generic_execute_production_allowed": false,
+      "graph_permissions": [
+        "User-PasswordProfile.ReadWrite.All"
+      ],
+      "idempotency_key_fields": [
+        "cmdb_tenant_id",
+        "operation",
+        "target.resolved_object_id",
+        "parameters.credential_delivery_reference"
+      ],
+      "implemented": false,
+      "intended_state_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "password_reset_verified": {
+            "const": true,
+            "title": "Password Reset Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "password_reset_verified"
+        ],
+        "title": "ResetPasswordIntendedState",
+        "type": "object"
+      },
+      "parameter_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_delivery_reference": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Credential Delivery Reference",
+            "type": "string"
+          },
+          "privileged_account": {
+            "title": "Privileged Account",
+            "type": "boolean"
+          },
+          "verification_contract_reference": {
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:@/#-]{0,255}$",
+            "title": "Verification Contract Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential_delivery_reference",
+          "verification_contract_reference",
+          "privileged_account"
+        ],
+        "title": "ResetPasswordParameters",
+        "type": "object"
+      },
+      "policy_dependencies": [
+        "secret_safe_delivery",
+        "objective_password_reset_verification",
+        "sensitive_action_application_admin_role",
+        "privileged_role_hierarchy_policy"
+      ],
+      "read_permissions": [
+        "User.Read.All"
+      ],
+      "schema_version": "1.0",
+      "status": "blocked",
+      "supplied_risk_levels": [
+        "standard",
+        "high"
+      ],
+      "target_lifecycle": "existing",
+      "target_type": "user",
+      "unknown_outcome_behavior": "verification_only_recovery_no_retry"
+    }
+  },
+  "schema_version": "1.0",
+  "source_registry_digest": "c7e4d10db895f92840b22830aabc68d69c379a4b0d0e1bc1d459588c018212d0"
 }

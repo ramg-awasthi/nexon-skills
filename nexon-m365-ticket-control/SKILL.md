@@ -35,10 +35,12 @@ Reject bulk, wildcard, multi-target, multi-operation, multi-customer, and multi-
 10. Require a designated approver to approve that exact current plan in ServiceNow after the note is posted.
 11. Re-read all authoritative data immediately before execution and recompute the plan fingerprint.
 12. Atomically claim the approved attempt in ServiceNow.
-13. Send only the bounded execution envelope to the `m365-execution` subagent in `execute` mode.
-14. Validate the returned ticket, tenant, operation, target binding, plan fingerprint, approval entry, attempt, claim ID/version, correlation ID, status, and verification evidence against the request.
-15. Resolve the ticket only after objective verification succeeds.
-16. On failure or doubt, perform no additional Microsoft action, leave the ticket open, add a safe work note, and apply the notification contract.
+13. Complete execution-binding preflight, then send only the bounded operation-specific envelope to the `m365-execution` subagent in `execute_explicit` mode.
+14. Require the one-time ServiceNow claim consume and `write_started` transition at the deterministic write boundary.
+15. Send the bounded `verify_explicit` envelope for independent end-state verification; unknown outcomes use this verification-only route and never repeat the write.
+16. Validate the returned ticket, tenant, operation, target binding, plan fingerprint, approval entry, attempt, claim ID/version, correlation ID, status, and observed-state evidence against the request.
+17. Resolve the ticket only after objective verification succeeds.
+18. On failure or doubt, perform no additional Microsoft action, leave the ticket open, add a safe work note, and apply the notification contract.
 
 ## Enforce responsibility boundaries
 
