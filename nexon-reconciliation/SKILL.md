@@ -41,7 +41,7 @@ to `nexon-recon-exception-investigator`.
 ```text
 Site: Nexon Reconciliation Automation
 Upload: /recon-upload-space/<provider>/
-Reference: /recon-reference-space/<provider>/
+Reference: /recon-reference-space/sample-invoices/<provider>/
 Result: /recon-result-space/<provider>/<yyyy>/<MM>/<run_id>/
 ```
 

@@ -6,11 +6,12 @@ On the dedicated `Nexon Reconciliation Automation` site, create:
 
 ```text
 /recon-upload-space/
-/recon-reference-space/
+/recon-reference-space/sample-invoices/
 /recon-result-space/
 ```
 
-Create provider folders under each root:
+Create provider folders under the upload and result roots, and under the
+`sample-invoices` reference fixture root:
 
 ```text
 AAPT
