@@ -13,9 +13,9 @@ profiles:
 
 features:
   provider_api_enabled: false
-  billing_query_enabled: false
+  billing_query_enabled: true
   core_persistence_enabled: false
-  deterministic_matching_enabled: false
+  deterministic_matching_enabled: true
   db_update_enabled: false
   failure_notifications_enabled: false
 

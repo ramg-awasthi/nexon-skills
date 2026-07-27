@@ -31,6 +31,7 @@ from test_orchestrator_validator_lifecycle import (  # noqa: E402
     _download_receipt,
     _finish_fleet_database_handoffs,
     _fleet_plan,
+    _persistence_config,
     _publication_receipt as _valid_publication_receipt,
     _publication_verification_receipts,
 )
@@ -64,6 +65,9 @@ def _new_run(
         local_only=local_only,
         investigation=investigation,
     )
+    persistence_config = _persistence_config(root)
+    if run_mode == "reconciliation":
+        args.config = persistence_config
     effective_core_mode = (
         "azure_sql"
         if not local_only and core_mode == "sqlite_shadow"
@@ -95,7 +99,9 @@ def _new_run(
     ):
         result = run_recon.run(args)
     if not local_only and run_mode == "reconciliation":
-        result = _finish_fleet_database_handoffs(result, matched=matched)
+        result = _finish_fleet_database_handoffs(
+            result, matched=matched, config=persistence_config
+        )
     return result, Path(result["run_root"])
 
 
@@ -668,6 +674,7 @@ class RunReconRemainingBranchTests(unittest.TestCase):
                 result_root=result_root,
                 run_mode="reconciliation",
             )
+            args.config = _persistence_config(root)
             with (
                 patch.object(run_recon, "capability_manifest", return_value=_all_capabilities()),
                 patch.object(run_recon, "_run_command", side_effect=harness.command),
@@ -972,6 +979,11 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             run_manifest_path = run_root / "manifest" / "run_manifest.json"
             run_manifest = read_json(run_manifest_path)
             run_manifest["intake_mode"] = "provider_api"
+            policy_path = run_root / "manifest" / "execution_policy.json"
+            policy = read_json(policy_path)
+            policy["intake_mode"] = "provider_api"
+            write_json(policy_path, policy)
+            run_manifest["execution_policy_sha256"] = sha256_file(policy_path)
             write_json(run_manifest_path, run_manifest)
             provider_api_receipt = copy.deepcopy(valid)
             provider_api_receipt["source_move_receipt"] = None
@@ -979,9 +991,13 @@ class RunReconRemainingBranchTests(unittest.TestCase):
             for item in original_set["artifacts"]:
                 if Path(item["local_path"]) == run_manifest_path.resolve():
                     item["sha256"] = new_manifest_hash
+                elif Path(item["local_path"]) == policy_path.resolve():
+                    item["sha256"] = sha256_file(policy_path)
             for item in provider_api_receipt["uploaded_artifacts"]:
                 if Path(item["local_path"]) == run_manifest_path.resolve():
                     item["sha256"] = new_manifest_hash
+                elif Path(item["local_path"]) == policy_path.resolve():
+                    item["sha256"] = sha256_file(policy_path)
             write_json(publication_set_path, original_set)
             provider_api_with_move = copy.deepcopy(provider_api_receipt)
             provider_api_with_move["source_move_receipt"] = copy.deepcopy(
@@ -1564,7 +1580,7 @@ class ValidateRunRemainingBranchTests(unittest.TestCase):
                 workbook = validate_run._load_workbook(raw_path)
                 workbook["Result"].cell(2, 1).value = "tampered"
                 workbook.save(raw_path)
-                with self.assertRaisesRegex(RuntimeError, "persisted reconciliation results"):
+                with self.assertRaisesRegex(RuntimeError, "reconciliation results"):
                     validate_run.validate_workbooks(
                         run_root,
                         config,

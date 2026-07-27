@@ -110,8 +110,10 @@ workbooks, or publication completion.
 
 ## Full-Run Gate
 
-Stop with `core_reconciliation_not_available` when any required capability is
-false. SharePoint Intake MCP must pass capability, probe, index, preparation,
+Resolve config intent against capability first: disabled optional features are
+skipped, while enabled unavailable or required unavailable features block.
+Stop with `core_reconciliation_not_available` when the resulting policy has a
+blocker. SharePoint Intake MCP must pass capability, probe, index, preparation,
 binary fetch, and result re-download checks. Native SharePoint must separately
 pass move and upload checks. Nexon Recon Database MCP must pass capability and probe
 checks and advertise read queries plus core persistence when enabled.

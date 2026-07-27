@@ -31,7 +31,7 @@ from .db_mcp_handoff import (
 from .fetch_intake_artifact import verify_receipt_attestation
 from .intake_run import create_run
 from .match_recon import classify_line
-from .preflight_check import capability_manifest
+from .preflight_check import capability_manifest, execution_policy
 from .run_state import create_state, finalize_state, update_stage
 from .safe_unpack import extract_zip
 from .sqlserver_persistence import persist_sqlserver_run
@@ -554,18 +554,18 @@ def _record_persistence(
     )
 
 
-def _continue_after_persistence(
+def _continue_after_matching(
     *,
     args: argparse.Namespace,
     run_root: Path,
     state_path: Path,
     config: dict[str, Any],
-    persisted: dict[str, Any],
+    report_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     unresolved_path = run_root / "evidence" / "exception_input.json"
     unresolved = read_json(unresolved_path)
     update_stage(state_path, "raw_workbook", "running")
-    final_rows = persisted["rows"]
+    final_rows = report_rows
     refined_output: Path | None = None
     if unresolved["rows"]:
         if args.investigation is None:
@@ -601,7 +601,7 @@ def _continue_after_persistence(
     raw_output = run_root / "raw-recon-report" / "raw-reconciliation.xlsx"
     provider = str(read_json(state_path).get("provider") or "")
     write_reports(
-        raw_rows=persisted["rows"],
+        raw_rows=report_rows,
         refined_input_rows=final_rows,
         raw_output=raw_output,
         refined_output=refined_output,
@@ -691,30 +691,40 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
                 "provider_account_id"
             ]
         )
-        persistence_request = prepare_persistence_request(
-            environment=str(plan["environment"]),
-            run_id=run_root.name,
-            normalized=normalized,
-            candidates=candidates,
-            matches={"rows": match_rows},
-            provider_account_id=provider_account_id,
-            run_path=_logical_run_path(str(state.get("provider") or ""), run_root),
+        if config.get("features", {}).get("core_persistence_enabled") is True:
+            persistence_request = prepare_persistence_request(
+                environment=str(plan["environment"]),
+                run_id=run_root.name,
+                normalized=normalized,
+                candidates=candidates,
+                matches={"rows": match_rows},
+                provider_account_id=provider_account_id,
+                run_path=_logical_run_path(str(state.get("provider") or ""), run_root),
+            )
+            request_path = run_root / "manifest" / "database_persistence_request.json"
+            write_json(request_path, persistence_request)
+            update_stage(
+                state_path,
+                "supplier_persistence",
+                "running",
+                artifacts=[str(request_path)],
+            )
+            update_stage(state_path, "result_persistence", "running")
+            return {
+                "run_id": run_root.name,
+                "run_root": str(run_root),
+                "status": "awaiting_core_persistence",
+                "database_persistence_request": str(request_path),
+            }
+        update_stage(state_path, "supplier_persistence", "skipped")
+        update_stage(state_path, "result_persistence", "skipped")
+        return _continue_after_matching(
+            args=args,
+            run_root=run_root,
+            state_path=state_path,
+            config=config,
+            report_rows=match_rows,
         )
-        request_path = run_root / "manifest" / "database_persistence_request.json"
-        write_json(request_path, persistence_request)
-        update_stage(
-            state_path,
-            "supplier_persistence",
-            "running",
-            artifacts=[str(request_path)],
-        )
-        update_stage(state_path, "result_persistence", "running")
-        return {
-            "run_id": run_root.name,
-            "run_root": str(run_root),
-            "status": "awaiting_core_persistence",
-            "database_persistence_request": str(request_path),
-        }
     if persistence_stage.get("status") == "running":
         receipt_path = getattr(args, "database_persistence_receipt", None)
         if receipt_path is None:
@@ -741,18 +751,28 @@ def resume_run(args: argparse.Namespace) -> dict[str, Any]:
             persistence_manifest=persistence_manifest,
         )
         request_path.unlink()
-        return _continue_after_persistence(
+        return _continue_after_matching(
             args=args,
             run_root=run_root,
             state_path=state_path,
             config=config,
-            persisted=persisted,
+            report_rows=persisted["rows"],
         )
     if stage.get("status") == "running":
         if args.investigation is None:
             raise RuntimeError("resume_invalid: --investigation is required.")
-        persisted_path = run_root / "normalized" / "persisted_match_results.json"
-        persisted = read_json(persisted_path)
+        run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+        persistence_setting = run_manifest.get("core_persistence_enabled")
+        result_name = (
+            "persisted_match_results.json"
+            if persistence_setting is True
+            or (
+                persistence_setting is None
+                and (run_root / "normalized" / "persisted_match_results.json").is_file()
+            )
+            else "match_results.json"
+        )
+        persisted = read_json(run_root / "normalized" / result_name)
         final_rows = _apply_investigation(
             persisted.get("rows", []),
             read_json(args.investigation),
@@ -974,6 +994,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if features.get("provider_api_enabled") is not True or adapters.get(provider_key) is not True:
             raise RuntimeError("provider_api_not_available: provider API intake is not enabled for this provider.")
         _validate_provider_api_provenance(args)
+    if (
+        args.source_file is None
+        or args.result_root is None
+        or args.provider is None
+        or args.run_mode is None
+    ):
+        raise RuntimeError(
+            "run_input_missing: --provider, --source-file, --result-root, and --run-mode are required for a new run."
+        )
     database_mcp_identity: dict[str, Any] | None = None
     if args.run_mode == "reconciliation" and not args.local_only:
         database_capabilities_argument = getattr(
@@ -1017,25 +1046,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and database_mcp_identity.get("core_persistence") is True
         ),
     )
-    required = ["provider_parsing", "archive_validation"]
-    if args.run_mode == "reconciliation":
-        required.extend(
-            [
-                "core_supplier_persistence",
-                "request_scoped_billing_preparation",
-                "deterministic_comparison",
-                "core_result_persistence",
-                "current_workbook_generation",
-            ]
-        )
-    missing = [name for name in required if capabilities["capabilities"].get(name) is not True]
-    if missing:
-        raise RuntimeError(f"core_reconciliation_not_available: missing capabilities {missing}")
-
-    if args.source_file is None or args.result_root is None or args.provider is None or args.run_mode is None:
+    policy = execution_policy(
+        config,
+        capabilities,
+        run_mode=args.run_mode,
+        intake_mode=args.intake_mode,
+        provider=args.provider,
+        local_only=args.local_only,
+    )
+    required_runtime = ["provider_parsing", "archive_validation"]
+    missing_runtime = [
+        name
+        for name in required_runtime
+        if capabilities["capabilities"].get(name) is not True
+    ]
+    blockers = [*missing_runtime, *policy["blockers"]]
+    if blockers:
         raise RuntimeError(
-            "run_input_missing: --provider, --source-file, --result-root, and --run-mode are required for a new run."
+            f"core_reconciliation_not_available: missing capabilities or enabled features {blockers}"
         )
+
     verified_download_receipt: dict[str, Any] | None = None
     sharepoint_capability_argument = getattr(
         args, "sharepoint_mcp_capabilities", None
@@ -1086,7 +1116,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     run_id = run_root.name
     run_manifest_path = run_root / "manifest" / "run_manifest.json"
     run_manifest = read_json(run_manifest_path)
+    run_manifest["run_mode"] = args.run_mode
     run_manifest["billing_period"] = args.billing_period or ""
+    run_manifest["core_persistence_enabled"] = (
+        config.get("features", {}).get("core_persistence_enabled") is True
+    )
+    policy_path = run_root / "manifest" / "execution_policy.json"
+    write_json(policy_path, policy)
+    run_manifest["execution_policy_sha256"] = sha256_file(policy_path)
     if args.provider_account_id is not None:
         run_manifest["provider_account_id"] = args.provider_account_id
     if database_mcp_identity is not None:
@@ -1280,42 +1317,48 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             candidates=candidates,
         )
 
-        current_stage = "supplier_persistence"
-        update_stage(state_path, current_stage, "running")
-        update_stage(state_path, "result_persistence", "running")
-        core_mode = os.environ.get("NEXON_RECON_CORE_MODE", "").strip().lower()
-        persistence_args = {
-            "dsn": os.environ["NEXON_RECON_CORE_DSN"],
-            "normalized": normalized,
-            "candidates": candidates,
-            "matches": {"rows": match_rows},
-            "provider_account_id": args.provider_account_id,
-            "run_path": _logical_run_path(args.provider, run_root),
-        }
-        if core_mode == "sqlite_shadow":
-            persisted, persistence_manifest = persist_shadow_run(**persistence_args)
-        elif core_mode in {"sqlserver", "azure_sql"}:
-            persisted, persistence_manifest = persist_sqlserver_run(
-                **persistence_args
+        if config.get("features", {}).get("core_persistence_enabled") is True:
+            current_stage = "supplier_persistence"
+            update_stage(state_path, current_stage, "running")
+            update_stage(state_path, "result_persistence", "running")
+            core_mode = os.environ.get("NEXON_RECON_CORE_MODE", "").strip().lower()
+            persistence_args = {
+                "dsn": os.environ["NEXON_RECON_CORE_DSN"],
+                "normalized": normalized,
+                "candidates": candidates,
+                "matches": {"rows": match_rows},
+                "provider_account_id": args.provider_account_id,
+                "run_path": _logical_run_path(args.provider, run_root),
+            }
+            if core_mode == "sqlite_shadow":
+                persisted, persistence_manifest = persist_shadow_run(**persistence_args)
+            elif core_mode in {"sqlserver", "azure_sql"}:
+                persisted, persistence_manifest = persist_sqlserver_run(
+                    **persistence_args
+                )
+            else:
+                raise RuntimeError(
+                    "core_persistence_not_available: NEXON_RECON_CORE_MODE must be "
+                    "sqlite_shadow, sqlserver, or azure_sql."
+                )
+            _record_persistence(
+                run_root=run_root,
+                state_path=state_path,
+                persisted=persisted,
+                persistence_manifest=persistence_manifest,
             )
+            report_rows = persisted["rows"]
         else:
-            raise RuntimeError(
-                "core_persistence_not_available: NEXON_RECON_CORE_MODE must be "
-                "sqlite_shadow, sqlserver, or azure_sql."
-            )
-        _record_persistence(
-            run_root=run_root,
-            state_path=state_path,
-            persisted=persisted,
-            persistence_manifest=persistence_manifest,
-        )
+            update_stage(state_path, "supplier_persistence", "skipped")
+            update_stage(state_path, "result_persistence", "skipped")
+            report_rows = match_rows
         current_stage = "raw_workbook"
-        return _continue_after_persistence(
+        return _continue_after_matching(
             args=args,
             run_root=run_root,
             state_path=state_path,
             config=config,
-            persisted=persisted,
+            report_rows=report_rows,
         )
     except Exception as exc:
         update_stage(
