@@ -15,6 +15,7 @@ from .common import (
     read_json,
     write_json,
 )
+from .db_mcp_handoff import validate_database_mcp
 
 
 SHAREPOINT_INTAKE_TOOLS = {
@@ -178,13 +179,186 @@ def capability_manifest(
     }
 
 
+def execution_policy(
+    config: dict,
+    capabilities: dict,
+    *,
+    run_mode: str,
+    intake_mode: str,
+    provider: str,
+    local_only: bool,
+) -> dict:
+    """Resolve configured intent against observed runtime capabilities."""
+    if run_mode not in {"parser_validation", "reconciliation"}:
+        raise RuntimeError("execution_policy_invalid: unsupported run mode.")
+    if intake_mode not in {"manual_upload", "provider_api"}:
+        raise RuntimeError("execution_policy_invalid: unsupported intake mode.")
+    if provider not in PROVIDERS:
+        raise RuntimeError("execution_policy_invalid: unsupported provider.")
+
+    features = config.get("features", {})
+    if not isinstance(features, dict):
+        features = {}
+    adapters = config.get("provider_api_adapters", {})
+    if not isinstance(adapters, dict):
+        adapters = {}
+    observed = capabilities.get("capabilities", {})
+    if not isinstance(observed, dict):
+        observed = {}
+
+    decisions: dict[str, dict] = {}
+    blockers: list[str] = []
+
+    def decide(
+        name: str,
+        *,
+        enabled: bool,
+        required: bool,
+        available: bool | None,
+        owner: str,
+        enabled_action: str = "execute",
+    ) -> None:
+        if not enabled:
+            action = "block" if required else "skip"
+        elif available is False:
+            action = "block"
+        else:
+            action = enabled_action
+        decisions[name] = {
+            "enabled": enabled,
+            "required": required,
+            "available": available,
+            "owner": owner,
+            "action": action,
+        }
+        if action == "block":
+            blockers.append(name)
+
+    manual_intake = intake_mode == "manual_upload"
+    provider_api = intake_mode == "provider_api"
+    reconciliation = run_mode == "reconciliation"
+    fleet_run = not local_only
+    provider_key = provider.lower()
+
+    decide(
+        "sharepoint_binary_intake",
+        enabled=manual_intake and fleet_run,
+        required=manual_intake and fleet_run,
+        available=None,
+        owner="sharepoint_mcp",
+        enabled_action="binding_check_required",
+    )
+    decide(
+        "provider_api_intake",
+        enabled=provider_api,
+        required=provider_api,
+        available=(
+            features.get("provider_api_enabled") is True
+            and adapters.get(provider_key) is True
+        ),
+        owner="provider_adapter",
+    )
+    decide(
+        "billing_query",
+        enabled=reconciliation and features.get("billing_query_enabled") is True,
+        required=reconciliation,
+        available=(
+            observed.get("request_scoped_billing_preparation") is True
+            if reconciliation
+            else None
+        ),
+        owner="database_mcp" if fleet_run else "local_billing_adapter",
+    )
+    decide(
+        "deterministic_matching",
+        enabled=(
+            reconciliation
+            and features.get("deterministic_matching_enabled") is True
+        ),
+        required=reconciliation,
+        available=(
+            observed.get("deterministic_comparison") is True
+            if reconciliation
+            else None
+        ),
+        owner="reconciliation_runtime",
+    )
+    core_enabled = features.get("core_persistence_enabled") is True
+    decide(
+        "core_persistence",
+        enabled=core_enabled and reconciliation,
+        required=core_enabled and reconciliation,
+        available=(
+            observed.get("core_supplier_persistence") is True
+            and observed.get("core_result_persistence") is True
+            if core_enabled and reconciliation
+            else None
+        ),
+        owner="database_mcp" if fleet_run else "local_persistence_adapter",
+    )
+    decide(
+        "accepted_resolution_update",
+        enabled=features.get("db_update_enabled") is True,
+        required=False,
+        available=observed.get("accepted_resolution_update") is True,
+        owner="database_mcp",
+    )
+    decide(
+        "sharepoint_publication",
+        enabled=reconciliation and fleet_run,
+        required=reconciliation and fleet_run,
+        available=None,
+        owner="native_sharepoint_and_sharepoint_mcp",
+        enabled_action="binding_check_required",
+    )
+    failure_handling = config.get("failure_handling", {})
+    if not isinstance(failure_handling, dict):
+        failure_handling = {}
+    notifications_enabled = (
+        features.get("failure_notifications_enabled") is True
+        and failure_handling.get("notify_operator") is True
+    )
+    decide(
+        "failure_notification",
+        enabled=notifications_enabled,
+        required=False,
+        available=None,
+        owner="native_outlook",
+        enabled_action="binding_check_required",
+    )
+    decisions["exception_investigation"] = {
+        "enabled": reconciliation,
+        "required": False,
+        "available": None,
+        "owner": "nexon-recon-exception-investigator_and_database_mcp",
+        "action": "conditional_on_unresolved_rows" if reconciliation else "skip",
+    }
+
+    return {
+        "contract_version": 1,
+        "environment_agnostic": True,
+        "run_mode": run_mode,
+        "intake_mode": intake_mode,
+        "provider": provider,
+        "execution_mode": "local" if local_only else "fleet",
+        "decisions": decisions,
+        "blockers": blockers,
+        "status": "blocked" if blockers else "ready",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate one-time Nexon recon folder setup.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--local-check", action="store_true", help="Treat fixed roots as local filesystem paths.")
     parser.add_argument("--sharepoint-mcp-capabilities", type=Path)
     parser.add_argument("--sharepoint-mcp-probe", type=Path)
+    parser.add_argument("--database-mcp-capabilities", type=Path)
+    parser.add_argument("--database-mcp-probe", type=Path)
     parser.add_argument("--output", type=Path, help="Write a machine-readable capability manifest.")
+    parser.add_argument("--run-mode", choices=("parser_validation", "reconciliation"))
+    parser.add_argument("--intake-mode", choices=("manual_upload", "provider_api"))
+    parser.add_argument("--provider", choices=sorted(PROVIDERS))
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -218,11 +392,61 @@ def main() -> int:
         )
         mcp_validated = True
 
+    database_validated = False
+    database_persistence = False
+    if args.run_mode == "reconciliation" and not args.local_check:
+        if (
+            args.database_mcp_capabilities is None
+            or args.database_mcp_probe is None
+        ):
+            raise RuntimeError(
+                "database_mcp_required: reconciliation preflight requires capability and probe receipts."
+            )
+        database_config = config.get("database_mcp", {})
+        environment = (
+            str(database_config.get("environment") or "").strip().lower()
+            if isinstance(database_config, dict)
+            else ""
+        )
+        if not environment:
+            raise RuntimeError(
+                "database_mcp_config_invalid: database_mcp.environment is required."
+            )
+        database_identity = validate_database_mcp(
+            read_json(args.database_mcp_capabilities.resolve()),
+            read_json(args.database_mcp_probe.resolve()),
+            environment=environment,
+            require_persistence=(
+                config.get("features", {}).get("core_persistence_enabled") is True
+            ),
+            row_limit=int(
+                config.get("limits", {}).get("billing_query_row_limit", 5000)
+            ),
+        )
+        database_validated = True
+        database_persistence = database_identity["core_persistence"] is True
+
     capabilities = capability_manifest(
         config,
         local_check=args.local_check,
         sharepoint_mcp_validated=mcp_validated,
+        database_mcp_validated=database_validated,
+        database_mcp_persistence=database_persistence,
     )
+    policy_arguments = (args.run_mode, args.intake_mode, args.provider)
+    if any(policy_arguments) and not all(policy_arguments):
+        raise RuntimeError(
+            "execution_policy_invalid: --run-mode, --intake-mode, and --provider must be supplied together."
+        )
+    if all(policy_arguments):
+        capabilities["execution_policy"] = execution_policy(
+            config,
+            capabilities,
+            run_mode=args.run_mode,
+            intake_mode=args.intake_mode,
+            provider=args.provider,
+            local_only=args.local_check,
+        )
     if args.output:
         write_json(args.output, capabilities)
 

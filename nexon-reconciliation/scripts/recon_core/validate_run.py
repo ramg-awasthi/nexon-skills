@@ -209,43 +209,95 @@ def assert_audit(run_root: Path, run_id: str) -> dict[str, Any]:
     return state
 
 
+def assert_execution_policy(run_root: Path, run_manifest: dict[str, Any]) -> None:
+    policy_path = run_root / "manifest" / "execution_policy.json"
+    expected_hash = run_manifest.get("execution_policy_sha256")
+    if not policy_path.exists() and expected_hash is None:
+        return
+    if not policy_path.is_file() or not isinstance(expected_hash, str):
+        raise RuntimeError("Execution policy artifact and manifest hash must both exist.")
+    actual_hash = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+    if actual_hash != expected_hash:
+        raise RuntimeError("Execution policy hash does not match the run manifest.")
+    policy = read_json(policy_path)
+    decisions = policy.get("decisions")
+    if (
+        policy.get("contract_version") != 1
+        or policy.get("environment_agnostic") is not True
+        or policy.get("status") != "ready"
+        or policy.get("blockers") != []
+        or policy.get("run_mode") != run_manifest.get("run_mode")
+        or policy.get("intake_mode") != run_manifest.get("intake_mode")
+        or policy.get("provider") != run_manifest.get("provider")
+        or not isinstance(decisions, dict)
+    ):
+        raise RuntimeError("Execution policy identity or ready state is invalid.")
+    core = decisions.get("core_persistence", {})
+    core_enabled = (
+        policy.get("run_mode") == "reconciliation"
+        and run_manifest.get("core_persistence_enabled") is True
+    )
+    if (
+        core.get("enabled") is not core_enabled
+        or core.get("action") != ("execute" if core_enabled else "skip")
+    ):
+        raise RuntimeError("Execution policy core-persistence decision drifted from config.")
+    accepted = decisions.get("accepted_resolution_update", {})
+    if accepted.get("enabled") is not False or accepted.get("action") != "skip":
+        raise RuntimeError("Execution policy must keep accepted-resolution updates disabled.")
+
+
 def assert_reconciliation_runtime(run_root: Path, state: dict[str, Any], parsed_rows: int) -> None:
-    required_files = (
+    run_manifest = read_json(run_root / "manifest" / "run_manifest.json")
+    persistence_setting = run_manifest.get("core_persistence_enabled")
+    persistence_enabled = (
+        persistence_setting is True
+        or (
+            persistence_setting is None
+            and (run_root / "manifest" / "persistence_manifest.json").is_file()
+        )
+    )
+    required_files = [
         run_root / "evidence" / "billing_candidates.json",
         run_root / "logs" / "billing_query_log.json",
         run_root / "normalized" / "match_results.json",
+    ]
+    persistence_files = [
         run_root / "manifest" / "persistence_manifest.json",
         run_root / "normalized" / "persisted_match_results.json",
-    )
+    ]
+    if persistence_enabled:
+        required_files.extend(persistence_files)
+    elif any(path.exists() for path in persistence_files):
+        raise RuntimeError("Report-only reconciliation must not contain persistence artifacts.")
     missing = [str(path) for path in required_files if not path.is_file()]
     if missing:
         raise RuntimeError(f"Reconciliation runtime artifacts are missing: {missing}")
-    persistence = read_json(run_root / "manifest" / "persistence_manifest.json")
     run_id = run_root.name
     provider = run_root.parent.parent.parent.name
-    if persistence.get("run_id") != run_id or persistence.get("provider") != provider:
-        raise RuntimeError("Persistence manifest identity does not match the current run.")
-    if persistence.get("transaction") != "committed":
-        raise RuntimeError("Persistence manifest does not prove a committed transaction.")
-    if int(persistence.get("supplier_line_count", -1)) != parsed_rows:
-        raise RuntimeError("Persistence supplier-line count does not match parser output.")
-    result_count = int(persistence.get("result_count", -1))
-    if result_count < parsed_rows:
-        raise RuntimeError("Persistence has fewer results than parser lines.")
-    persisted_rows = read_json(
-        run_root / "normalized" / "persisted_match_results.json"
-    ).get("rows", [])
     match_rows = read_json(run_root / "normalized" / "match_results.json").get(
         "rows", []
     )
-    if len(persisted_rows) != result_count:
-        raise RuntimeError("Persistence result count does not match persisted rows.")
-    if {
-        str(row.get("line_id", "")) for row in persisted_rows
-    } != {
-        str(row.get("line_id", "")) for row in match_rows
-    }:
-        raise RuntimeError("Persisted and matched result line identities differ.")
+    if persistence_enabled:
+        persistence = read_json(run_root / "manifest" / "persistence_manifest.json")
+        if persistence.get("run_id") != run_id or persistence.get("provider") != provider:
+            raise RuntimeError("Persistence manifest identity does not match the current run.")
+        if persistence.get("transaction") != "committed":
+            raise RuntimeError("Persistence manifest does not prove a committed transaction.")
+        if int(persistence.get("supplier_line_count", -1)) != parsed_rows:
+            raise RuntimeError("Persistence supplier-line count does not match parser output.")
+        result_count = int(persistence.get("result_count", -1))
+        if result_count < parsed_rows:
+            raise RuntimeError("Persistence has fewer results than parser lines.")
+        persisted_rows = read_json(
+            run_root / "normalized" / "persisted_match_results.json"
+        ).get("rows", [])
+        if len(persisted_rows) != result_count:
+            raise RuntimeError("Persistence result count does not match persisted rows.")
+        if {str(row.get("line_id", "")) for row in persisted_rows} != {
+            str(row.get("line_id", "")) for row in match_rows
+        }:
+            raise RuntimeError("Persisted and matched result line identities differ.")
     query_log = read_json(run_root / "logs" / "billing_query_log.json")
     if not isinstance(query_log, list) or not query_log:
         raise RuntimeError("Billing query log must contain at least one audited query chunk.")
@@ -266,7 +318,10 @@ def assert_reconciliation_runtime(run_root: Path, state: dict[str, Any], parsed_
         str(row.get("line_id"))
         for row in read_json(run_root / "normalized" / "provider_lines.json").get("lines", [])
     }
-    for artifact_name in ("match_results.json", "persisted_match_results.json"):
+    artifact_names = ["match_results.json"]
+    if persistence_enabled:
+        artifact_names.append("persisted_match_results.json")
+    for artifact_name in artifact_names:
         artifact_ids = {
             str(row.get("line_id"))
             for row in read_json(run_root / "normalized" / artifact_name).get("rows", [])
@@ -282,10 +337,14 @@ def assert_reconciliation_runtime(run_root: Path, state: dict[str, Any], parsed_
         "provider_parsing",
         "billing_preparation",
         "deterministic_comparison",
-        "supplier_persistence",
-        "result_persistence",
         "raw_workbook",
     }
+    if persistence_enabled:
+        required_completed.update({"supplier_persistence", "result_persistence"})
+    else:
+        for stage_name in ("supplier_persistence", "result_persistence"):
+            if stages.get(stage_name, {}).get("status") != "skipped":
+                raise RuntimeError(f"Report-only reconciliation must skip {stage_name}.")
     incomplete = sorted(
         stage for stage in required_completed if stages.get(stage, {}).get("status") != "completed"
     )
@@ -331,11 +390,18 @@ def validate_workbooks(run_root: Path, config: dict[str, Any], report_manifest: 
         raise RuntimeError(f"Raw workbook sheet contract mismatch: {raw_sheets}")
     if any(column.startswith(("agent_", "human_")) for column in raw_header):
         raise RuntimeError("Agent/human columns leaked into raw workbook.")
-    persisted_rows = read_json(
-        run_root / "normalized" / "persisted_match_results.json"
-    ).get("rows", [])
-    if _comparable_rows(raw_rows) != _comparable_rows(persisted_rows):
-        raise RuntimeError("Raw workbook contents do not match persisted reconciliation results.")
+    persistence_setting = run_manifest.get("core_persistence_enabled")
+    persistence_enabled = (
+        persistence_setting is True
+        or (
+            persistence_setting is None
+            and (run_root / "normalized" / "persisted_match_results.json").is_file()
+        )
+    )
+    result_name = "persisted_match_results.json" if persistence_enabled else "match_results.json"
+    expected_rows = read_json(run_root / "normalized" / result_name).get("rows", [])
+    if _comparable_rows(raw_rows) != _comparable_rows(expected_rows):
+        raise RuntimeError("Raw workbook contents do not match reconciliation results.")
 
     refined_value = report_manifest.get("refined_output")
     if refined_value:
@@ -356,8 +422,8 @@ def validate_workbooks(run_root: Path, config: dict[str, Any], report_manifest: 
             raise RuntimeError(f"Refined workbook sheet contract mismatch: {refined_sheets}")
         if len(raw_rows) != len(refined_rows):
             raise RuntimeError("Raw/refined workbook row counts differ.")
-        if _comparable_rows(refined_rows) != _comparable_rows(persisted_rows):
-            raise RuntimeError("Refined workbook raw fields do not match persisted results.")
+        if _comparable_rows(refined_rows) != _comparable_rows(expected_rows):
+            raise RuntimeError("Refined workbook raw fields do not match reconciliation results.")
         policy = evidence_summary_policy(config)
         for row in refined_rows:
             status = str(row.get("agent_match_status", ""))
@@ -398,6 +464,7 @@ def validate_run(run_root: Path, config: dict[str, Any], run_mode: str) -> dict[
         raise RuntimeError("Run manifest run_id does not match run folder.")
     if run_manifest.get("db_update_enabled") is not False:
         raise RuntimeError("Accepted-resolution update was not proven disabled.")
+    assert_execution_policy(run_root, run_manifest)
 
     provider = run_root.parent.parent.parent.name
     parsed_rows, warnings = assert_parser_contract(run_root, run_id, provider)

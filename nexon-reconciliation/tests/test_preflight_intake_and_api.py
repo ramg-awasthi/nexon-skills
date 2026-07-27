@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from types import SimpleNamespace
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from recon_core import preflight_check, provider_api_download  # noqa: E402
+from recon_core import preflight_check, provider_api_download, validate_run  # noqa: E402
 
 
 def valid_mcp_receipts() -> tuple[dict, dict]:
@@ -62,6 +63,29 @@ def valid_mcp_receipts() -> tuple[dict, dict]:
     return capabilities, probe
 
 
+def valid_database_receipts() -> tuple[dict, dict]:
+    return (
+        {
+            "service": "nexon-recon-db-mcp",
+            "environment": "dev",
+            "capabilities": {"read_queries": True, "core_persistence": False},
+            "query_policy": {
+                "read_only": True,
+                "schema_qualified_allowlist": True,
+                "comments_allowed": False,
+                "wildcard_projection_allowed": False,
+                "row_limit": 5000,
+                "audit_required": True,
+            },
+        },
+        {
+            "environment": "dev",
+            "reachable": True,
+            "database_name": "test_database",
+        },
+    )
+
+
 def write_config(
     path: Path,
     *,
@@ -103,6 +127,329 @@ def read_json(path: Path) -> dict:
 
 
 class PreflightIntakeAndProviderApiTests(unittest.TestCase):
+    def test_execution_policy_resolves_optional_and_required_integrations(self) -> None:
+        config = {
+            "features": {
+                "provider_api_enabled": False,
+                "billing_query_enabled": True,
+                "core_persistence_enabled": False,
+                "deterministic_matching_enabled": True,
+                "db_update_enabled": False,
+                "failure_notifications_enabled": False,
+            },
+            "provider_api_adapters": {"equinix": True},
+            "failure_handling": {"notify_operator": False},
+        }
+        capabilities = {
+            "capabilities": {
+                "request_scoped_billing_preparation": True,
+                "deterministic_comparison": True,
+                "core_supplier_persistence": False,
+                "core_result_persistence": False,
+                "accepted_resolution_update": False,
+            }
+        }
+
+        policy = preflight_check.execution_policy(
+            config,
+            capabilities,
+            run_mode="reconciliation",
+            intake_mode="manual_upload",
+            provider="AAPT",
+            local_only=False,
+        )
+
+        self.assertEqual("ready", policy["status"])
+        self.assertTrue(policy["environment_agnostic"])
+        decisions = policy["decisions"]
+        self.assertEqual(
+            "binding_check_required", decisions["sharepoint_binary_intake"]["action"]
+        )
+        self.assertEqual("execute", decisions["billing_query"]["action"])
+        self.assertEqual("execute", decisions["deterministic_matching"]["action"])
+        self.assertEqual("skip", decisions["core_persistence"]["action"])
+        self.assertEqual("skip", decisions["accepted_resolution_update"]["action"])
+        self.assertEqual(
+            "binding_check_required", decisions["sharepoint_publication"]["action"]
+        )
+        self.assertEqual("skip", decisions["failure_notification"]["action"])
+        self.assertEqual(
+            "conditional_on_unresolved_rows",
+            decisions["exception_investigation"]["action"],
+        )
+
+        config["features"]["core_persistence_enabled"] = True
+        blocked = preflight_check.execution_policy(
+            config,
+            capabilities,
+            run_mode="reconciliation",
+            intake_mode="manual_upload",
+            provider="AAPT",
+            local_only=False,
+        )
+        self.assertEqual("blocked", blocked["status"])
+        self.assertEqual(["core_persistence"], blocked["blockers"])
+
+    def test_execution_policy_handles_provider_api_notifications_and_validation(self) -> None:
+        config = {
+            "features": {
+                "provider_api_enabled": True,
+                "billing_query_enabled": True,
+                "core_persistence_enabled": False,
+                "deterministic_matching_enabled": True,
+                "db_update_enabled": False,
+                "failure_notifications_enabled": True,
+            },
+            "provider_api_adapters": {"equinix": True},
+            "failure_handling": {"notify_operator": True},
+        }
+        capabilities = {
+            "capabilities": {
+                "request_scoped_billing_preparation": True,
+                "deterministic_comparison": True,
+                "accepted_resolution_update": False,
+            }
+        }
+        policy = preflight_check.execution_policy(
+            config,
+            capabilities,
+            run_mode="reconciliation",
+            intake_mode="provider_api",
+            provider="Equinix",
+            local_only=False,
+        )
+        self.assertEqual("execute", policy["decisions"]["provider_api_intake"]["action"])
+        self.assertEqual("skip", policy["decisions"]["sharepoint_binary_intake"]["action"])
+        self.assertEqual(
+            "binding_check_required", policy["decisions"]["failure_notification"]["action"]
+        )
+
+        config["provider_api_adapters"] = []
+        blocked = preflight_check.execution_policy(
+            config,
+            capabilities,
+            run_mode="reconciliation",
+            intake_mode="provider_api",
+            provider="Equinix",
+            local_only=False,
+        )
+        self.assertEqual(["provider_api_intake"], blocked["blockers"])
+
+        for kwargs in (
+            {"run_mode": "bad", "intake_mode": "manual_upload", "provider": "AAPT"},
+            {"run_mode": "reconciliation", "intake_mode": "bad", "provider": "AAPT"},
+            {"run_mode": "reconciliation", "intake_mode": "manual_upload", "provider": "Bad"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "execution_policy_invalid"):
+                preflight_check.execution_policy(
+                    config, capabilities, local_only=False, **kwargs
+                )
+
+        fallback = preflight_check.execution_policy(
+            {"features": [], "provider_api_adapters": [], "failure_handling": []},
+            {"capabilities": []},
+            run_mode="parser_validation",
+            intake_mode="manual_upload",
+            provider="AAPT",
+            local_only=True,
+        )
+        self.assertEqual("ready", fallback["status"])
+
+    def test_execution_policy_artifact_validation_fails_closed(self) -> None:
+        base_policy = {
+            "contract_version": 1,
+            "environment_agnostic": True,
+            "status": "ready",
+            "blockers": [],
+            "run_mode": "reconciliation",
+            "intake_mode": "manual_upload",
+            "provider": "AAPT",
+            "decisions": {
+                "core_persistence": {"enabled": False, "action": "skip"},
+                "accepted_resolution_update": {"enabled": False, "action": "skip"},
+            },
+        }
+        base_manifest = {
+            "run_mode": "reconciliation",
+            "intake_mode": "manual_upload",
+            "provider": "AAPT",
+            "core_persistence_enabled": False,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp)
+            manifest_dir = run_root / "manifest"
+            manifest_dir.mkdir()
+            policy_path = manifest_dir / "execution_policy.json"
+
+            with self.assertRaisesRegex(RuntimeError, "must both exist"):
+                validate_run.assert_execution_policy(
+                    run_root, {**base_manifest, "execution_policy_sha256": "0" * 64}
+                )
+
+            policy_path.write_text(json.dumps(base_policy), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "hash does not match"):
+                validate_run.assert_execution_policy(
+                    run_root, {**base_manifest, "execution_policy_sha256": "0" * 64}
+                )
+
+            def manifest_for(policy: dict) -> dict:
+                policy_path.write_text(json.dumps(policy), encoding="utf-8")
+                return {
+                    **base_manifest,
+                    "execution_policy_sha256": hashlib.sha256(
+                        policy_path.read_bytes()
+                    ).hexdigest(),
+                }
+
+            invalid_identity = {**base_policy, "status": "blocked"}
+            with self.assertRaisesRegex(RuntimeError, "identity or ready state"):
+                validate_run.assert_execution_policy(
+                    run_root, manifest_for(invalid_identity)
+                )
+
+            core_drift = json.loads(json.dumps(base_policy))
+            core_drift["decisions"]["core_persistence"]["action"] = "execute"
+            with self.assertRaisesRegex(RuntimeError, "core-persistence decision"):
+                validate_run.assert_execution_policy(
+                    run_root, manifest_for(core_drift)
+                )
+
+            update_drift = json.loads(json.dumps(base_policy))
+            update_drift["decisions"]["accepted_resolution_update"]["enabled"] = True
+            with self.assertRaisesRegex(RuntimeError, "accepted-resolution updates"):
+                validate_run.assert_execution_policy(
+                    run_root, manifest_for(update_drift)
+                )
+
+    def test_preflight_emits_execution_policy_when_run_context_is_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
+            write_config(config)
+            output = root / "output.json"
+            old_argv = sys.argv
+            try:
+                sys.argv = [
+                    "preflight_check.py",
+                    "--config",
+                    str(config),
+                    "--local-check",
+                    "--run-mode",
+                    "parser_validation",
+                    "--intake-mode",
+                    "manual_upload",
+                    "--provider",
+                    "AAPT",
+                    "--output",
+                    str(output),
+                ]
+                self.assertEqual(2, preflight_check.main())
+                self.assertEqual(
+                    "ready", read_json(output)["execution_policy"]["status"]
+                )
+
+                sys.argv = [
+                    "preflight_check.py",
+                    "--config",
+                    str(config),
+                    "--local-check",
+                    "--run-mode",
+                    "parser_validation",
+                ]
+                with self.assertRaisesRegex(RuntimeError, "must be supplied together"):
+                    preflight_check.main()
+            finally:
+                sys.argv = old_argv
+
+    def test_reconciliation_preflight_requires_and_consumes_database_mcp_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
+            write_config(config)
+            config.write_text(
+                config.read_text(encoding="utf-8")
+                .replace("billing_query_enabled: false", "billing_query_enabled: true")
+                .replace(
+                    "  db_update_enabled: false",
+                    "  core_persistence_enabled: false\n"
+                    "  deterministic_matching_enabled: true\n"
+                    "  db_update_enabled: false",
+                )
+                .replace(
+                    "features:\n",
+                    "database_mcp:\n  environment: dev\nfeatures:\n",
+                ),
+                encoding="utf-8",
+            )
+            sp_capabilities = root / "sp-capabilities.json"
+            sp_probe = root / "sp-probe.json"
+            db_capabilities = root / "db-capabilities.json"
+            db_probe = root / "db-probe.json"
+            output = root / "output.json"
+            sp_capability_payload, sp_probe_payload = valid_mcp_receipts()
+            db_capability_payload, db_probe_payload = valid_database_receipts()
+            for path, payload in (
+                (sp_capabilities, sp_capability_payload),
+                (sp_probe, sp_probe_payload),
+                (db_capabilities, db_capability_payload),
+                (db_probe, db_probe_payload),
+            ):
+                path.write_text(json.dumps(payload), encoding="utf-8")
+
+            base = [
+                "preflight_check.py",
+                "--config",
+                str(config),
+                "--run-mode",
+                "reconciliation",
+                "--intake-mode",
+                "manual_upload",
+                "--provider",
+                "AAPT",
+                "--sharepoint-mcp-capabilities",
+                str(sp_capabilities),
+                "--sharepoint-mcp-probe",
+                str(sp_probe),
+            ]
+            old_argv = sys.argv
+            try:
+                sys.argv = base
+                with self.assertRaisesRegex(RuntimeError, "database_mcp_required"):
+                    preflight_check.main()
+
+                complete = [
+                    *base,
+                    "--database-mcp-capabilities",
+                    str(db_capabilities),
+                    "--database-mcp-probe",
+                    str(db_probe),
+                    "--output",
+                    str(output),
+                ]
+                valid_config_text = config.read_text(encoding="utf-8")
+                config.write_text(
+                    valid_config_text.replace(
+                        "database_mcp:\n  environment: dev", "database_mcp: []"
+                    ),
+                    encoding="utf-8",
+                )
+                sys.argv = complete
+                with self.assertRaisesRegex(RuntimeError, "environment is required"):
+                    preflight_check.main()
+
+                config.write_text(valid_config_text, encoding="utf-8")
+                sys.argv = complete
+                self.assertEqual(0, preflight_check.main())
+            finally:
+                sys.argv = old_argv
+
+            payload = read_json(output)
+            self.assertEqual("ready", payload["execution_policy"]["status"])
+            self.assertEqual(
+                "execute",
+                payload["execution_policy"]["decisions"]["billing_query"]["action"],
+            )
+
     def test_sharepoint_mcp_receipt_validation_rejects_contract_mutations(self) -> None:
         capabilities, probe = valid_mcp_receipts()
         config = {

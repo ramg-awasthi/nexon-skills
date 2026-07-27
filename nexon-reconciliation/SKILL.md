@@ -1,6 +1,6 @@
 ---
 name: nexon-reconciliation
-description: Run or validate Nexon telco invoice reconciliation for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using SharePoint Intake MCP source discovery and binary staging, native SharePoint writes, deterministic provider parsers, audited billing queries, transactional persistence, current-contract XLSX reports, and bounded exception investigation.
+description: Run or validate Nexon telco invoice reconciliation for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix using SharePoint Intake MCP source discovery and binary staging, native SharePoint writes, deterministic provider parsers, audited billing queries, configurable lifecycle persistence, current-contract XLSX reports, and bounded exception investigation.
 ---
 
 # Nexon Reconciliation
@@ -111,30 +111,55 @@ candidate and batch results are limited to 50 entries.
 
 ## Capability Gate
 
+Resolve configured intent and integration capability through one
+environment-agnostic policy. Disabled optional features are skipped; enabled
+available features execute; enabled unavailable features block; required
+unavailable stages always block; conditional features run only when their
+condition occurs. The same rule applies to dev and prod Database MCP,
+SharePoint Intake MCP, native SharePoint writes, native Outlook notifications,
+and provider adapters. Require an MCP receipt only when that MCP owns a
+selected reconciliation stage. The separate M365 Graph lifecycle MCP is not
+the Outlook notification channel and is not used by this skill. Never rewrite
+an MCP capability response to satisfy config, and never require a disabled
+optional binding.
+
 Save the unchanged `{schema_version: "1.0", kind, result}` outputs from
-`recon_sp_get_capabilities` and `recon_sp_probe`, then run:
+`recon_sp_get_capabilities` and `recon_sp_probe`. For reconciliation, also save
+unchanged `recon_db_get_capabilities` and `recon_db_probe` results before
+preflight. Then run:
 
 ```text
 python skills/nexon-reconciliation/scripts/preflight_check.py \
   --config skills/nexon-reconciliation/config/recon_settings.yaml \
+  --run-mode <parser_validation|reconciliation> \
+  --intake-mode <manual_upload|provider_api> \
+  --provider <provider> \
   --sharepoint-mcp-capabilities <capabilities_receipt.json> \
   --sharepoint-mcp-probe <probe_receipt.json> \
+  --database-mcp-capabilities <database_capabilities.json> \
+  --database-mcp-probe <database_probe.json> \
   --output <runtime_capabilities.json>
 ```
 
+Omit both database arguments for parser validation. Reconciliation requires
+both.
+
 For `parser_validation`, require binary source staging, archive validation,
-and provider parsing. For `reconciliation`, also require core supplier
-persistence, request-scoped billing preparation, deterministic comparison,
-core result persistence, and current workbook generation.
+and provider parsing. For `reconciliation`, always require request-scoped
+billing preparation, deterministic comparison, and current workbook generation.
+Require core supplier/result persistence only when
+`core_persistence_enabled=true`. When false, persistence stages must be
+`skipped` and reconciliation continues through reports and publication.
 
-Stop with `core_reconciliation_not_available` when a required capability is
-false. Do not downgrade reconciliation into parser validation.
+Stop with `core_reconciliation_not_available` when the generated execution
+policy is blocked. Check native/MCP bindings only for decisions marked
+`binding_check_required`. Freeze the policy with the run and do not reinterpret
+configuration during resume. Do not downgrade reconciliation into parser
+validation.
 
-For reconciliation, also save unchanged results from
-`recon_db_get_capabilities` and `recon_db_probe`. Require the configured
-environment, read-only query policy, schema-qualified allowlist, no comments,
-no wildcard projection, audit, sufficient row limit, reachability, and core
-persistence when enabled.
+For reconciliation require the configured database environment, read-only query
+policy, schema-qualified allowlist, no comments, no wildcard projection, audit,
+sufficient row limit, reachability, and core persistence when enabled.
 
 ## Runtime Entry Point
 
@@ -199,7 +224,8 @@ python skills/nexon-reconciliation/scripts/run_recon.py \
 On successful resume, delete the temporary receipts. The runtime deletes the
 frozen request and preserves only hashes and the sanitized query log.
 
-For `awaiting_core_persistence`, call `recon_db_persist_run` once with the
+Only when `core_persistence_enabled=true` may the run return
+`awaiting_core_persistence`. For that status, call `recon_db_persist_run` once with the
 exact frozen `database_persistence_request`, excluding only
 `contract_version`. Save the unchanged response and resume:
 
@@ -259,8 +285,9 @@ DSN persistence are available only for `--local-only` tests.
 
 ## Audit And Failures
 
-Every run requires durable run, state, audit, parser, and applicable
-persistence/query/report manifests. Fleet publication additionally requires a
+Every run requires durable run, state, audit, parser, query, and report
+manifests. Persistence manifests are required only when lifecycle persistence
+is enabled and are forbidden in report-only mode. Fleet publication additionally requires a
 sanitized native publication receipt and complete MCP re-download receipts.
 
 Failure manifests contain only run/correlation identity, failed stage, failure

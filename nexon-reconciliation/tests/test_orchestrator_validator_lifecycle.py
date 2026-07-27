@@ -22,6 +22,17 @@ CONFIG = Path(__file__).resolve().parents[1] / "config" / "recon_settings.yaml"
 TEST_ATTESTATION_KEY = "A" * 43
 
 
+def _persistence_config(root: Path) -> Path:
+    path = root / "persistence-config.yaml"
+    path.write_text(
+        CONFIG.read_text(encoding="utf-8").replace(
+            "core_persistence_enabled: false", "core_persistence_enabled: true"
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _all_capabilities() -> dict:
     return {
         "capabilities": {
@@ -449,6 +460,83 @@ def _finish_fleet_database_handoffs(
 
 
 class OrchestratorValidatorLifecycleTests(unittest.TestCase):
+    def test_report_only_reconciliation_skips_persistence_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "invoice.csv"
+            source.write_text("invoice", encoding="utf-8")
+            (root / "billing.sql").write_text("SELECT 1", encoding="utf-8")
+            result_root = root / "results"
+            (result_root / "AAPT").mkdir(parents=True)
+            harness = RuntimeHarness(True)
+            with (
+                patch.object(run_recon, "capability_manifest", return_value=_all_capabilities()),
+                patch.object(run_recon, "_run_command", side_effect=harness.command),
+            ):
+                result = run_recon.run(
+                    _args(source=source, result_root=result_root,
+                          run_mode="reconciliation", local_only=True)
+                )
+            self.assertEqual("passed", result["validation"])
+            run_root = Path(result["run_root"])
+            state = read_json(run_root / "manifest" / "run_state.json")
+            self.assertEqual("skipped", state["stages"]["supplier_persistence"]["status"])
+            self.assertEqual("skipped", state["stages"]["result_persistence"]["status"])
+            self.assertFalse((run_root / "manifest" / "persistence_manifest.json").exists())
+            self.assertFalse((run_root / "normalized" / "persisted_match_results.json").exists())
+
+            unexpected = run_root / "manifest" / "persistence_manifest.json"
+            write_json(unexpected, {"unexpected": True})
+            with self.assertRaisesRegex(RuntimeError, "must not contain persistence artifacts"):
+                validate_run.assert_reconciliation_runtime(run_root, state, 1)
+            unexpected.unlink()
+            invalid_state = dict(state)
+            invalid_state["stages"] = dict(state["stages"])
+            invalid_state["stages"]["supplier_persistence"] = {"status": "completed"}
+            with self.assertRaisesRegex(RuntimeError, "must skip supplier_persistence"):
+                validate_run.assert_reconciliation_runtime(run_root, invalid_state, 1)
+
+    def test_report_only_fleet_resume_bypasses_persistence_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "invoice.csv"
+            source.write_text("invoice", encoding="utf-8")
+            (root / "billing.sql").write_text("SELECT 1", encoding="utf-8")
+            result_root = root / "results"
+            (result_root / "AAPT").mkdir(parents=True)
+            harness = RuntimeHarness(True)
+            args = _args(source=source, result_root=result_root,
+                         run_mode="reconciliation", local_only=False)
+            with (
+                patch.object(run_recon, "capability_manifest", return_value=_all_capabilities()),
+                patch.object(run_recon, "_verify_download_receipt",
+                             side_effect=lambda **kwargs: read_json(kwargs["receipt_path"])),
+                patch.object(run_recon, "_run_command", side_effect=harness.command),
+                patch.object(run_recon, "prepare_billing_query_plan", side_effect=_fleet_plan),
+            ):
+                first = run_recon.run(args)
+            run_root = Path(first["run_root"])
+            receipt = root / "billing-receipt.json"
+            write_json(receipt, {"test": True})
+            with patch.object(
+                run_recon,
+                "consume_billing_query_receipts",
+                return_value=(
+                    {"run_id": run_root.name, "provider": "AAPT",
+                     "candidates_by_line": {"line-1": [_candidate()]}},
+                    [{"chunk_id": 1, "row_count": 1}],
+                ),
+            ):
+                second = run_recon.run(
+                    Namespace(**{**vars(_args(resume_root=run_root, local_only=False)),
+                                 "billing_mcp_receipt": [receipt]})
+                )
+            self.assertEqual("awaiting_publication", second["status"])
+            self.assertNotIn("database_persistence_request", second)
+            state = read_json(run_root / "manifest" / "run_state.json")
+            self.assertEqual("skipped", state["stages"]["supplier_persistence"]["status"])
+            self.assertEqual("skipped", state["stages"]["result_persistence"]["status"])
+
     def _new_run(
         self,
         root: Path,
@@ -469,6 +557,9 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
             run_mode=run_mode,
             local_only=local_only,
         )
+        persistence_config = _persistence_config(root)
+        if run_mode == "reconciliation":
+            args.config = persistence_config
         core_mode = "sqlite_shadow" if local_only else "azure_sql"
         persistence = (
             patch.object(run_recon, "persist_shadow_run", side_effect=harness.persist)
@@ -496,7 +587,9 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
         ):
             result = run_recon.run(args)
         if not local_only and run_mode == "reconciliation":
-            result = _finish_fleet_database_handoffs(result, matched=matched)
+            result = _finish_fleet_database_handoffs(
+                result, matched=matched, config=persistence_config
+            )
         return result, Path(result["run_root"])
 
     def _resume(
@@ -812,7 +905,7 @@ class OrchestratorValidatorLifecycleTests(unittest.TestCase):
                 column = RAW_WORKBOOK_COLUMNS.index("ServiceProviderInvoiceNumber") + 1
                 workbook["Result"].cell(2, column).value = "TAMPERED"
                 workbook.save(raw_path)
-                with self.assertRaisesRegex(RuntimeError, "persisted reconciliation results"):
+                with self.assertRaisesRegex(RuntimeError, "reconciliation results"):
                     validate_run.validate_run(
                         run_root,
                         validate_run.load_config(CONFIG),
