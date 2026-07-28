@@ -1,9 +1,16 @@
 # Access And Secrets
 
+## Immutable Runtime Boundary
+
+The Fleet snapshot contains the `nexon-recon` executable, packaged settings,
+dependencies, and provider adapters. Skills and prompts contain no executable
+fallback, config path, credential, token, DSN, or environment-specific secret.
+Do not install dependencies or substitute loose scripts during a run.
+
 ## SharePoint Boundaries
 
-SharePoint Intake MCP holds the read-only SharePoint application credential.
-Fleet receives only five tools:
+SharePoint Intake MCP holds its read-only SharePoint application credential and
+exposes only:
 
 ```text
 recon_sp_get_capabilities
@@ -13,75 +20,83 @@ recon_sp_prepare_download
 recon_sp_prepare_reference_test
 ```
 
-The MCP service resolves tenant/site/drive identity internally. Prompts,
-skills, config, agent memory, reports, and run manifests contain no Graph
-credential, site ID, drive ID, or item ID.
+The service resolves tenant, site, drive, item, endpoint, and attestation
+identity internally. These values and Graph credentials do not enter prompts,
+skills, agent memory, reports, or durable manifests.
 
-Native SharePoint is independently authorized for:
+Native SharePoint is independently authorized for exact source moves after
+verified publication upload, result uploads, and setup-time folder validation.
+Do not use native text reads for binary files, create share links, change
+permissions, or delete unrelated items.
 
-- exact source moves after successful staging;
-- result artifact uploads;
-- setup-time folder validation.
+## One-Time SharePoint Transfer
 
-Do not use native text reads for binary sources. Do not create share links,
-change permissions, or delete unrelated items.
+The MCP spools and hashes the selected bytes before returning an encrypted,
+short-lived, single-use preparation bound to an ephemeral recipient key. Treat
+the preparation and private key as transient secrets:
 
-## One-Time Download Ticket
+- store them only in restricted temporary files;
+- never display, summarize, transform, or log their contents;
+- pass only their paths to `nexon-recon fetch`;
+- dispose of both before ticket redemption;
+- never retry after a fetch attempt.
 
-The MCP service completely spools and SHA-256 attests the selected bytes before
-returning an unchanged
-`{schema_version: "1.0", kind: "prepared_download", result: ...}` envelope.
-Its result contains the exact environment-specific HTTPS `/download` endpoint
-and a short-lived single-use ticket encrypted to an ephemeral client key.
+The runtime sends the decrypted ticket only in the required request header,
+refuses redirects, and verifies the signed response attestation. Never put the
+ticket, private key, endpoint, or authorization material in a URL, query, CLI
+argument, output, exception, audit record, or durable receipt.
 
-The preparation file is transient secret material:
+## Database Boundaries
 
-- write it with restrictive permissions when possible;
-- do not display, summarize, transform, or log it;
-- pass only its file path and the private-key path to
-  `fetch_intake_artifact.py`;
-- delete both before the fetcher redeems the ticket;
-- never retry it after any failure.
+Database credentials and DSNs remain exclusively in the Database MCP service
+environment. The Fleet agent receives only MCP operations and sanitized
+receipts.
 
-The fetcher refuses redirects, sends the decrypted ticket only through
-`X-Recon-Download-Ticket`, and verifies the signed response attestation. Never
-put the private key or ticket in a URL, query, CLI argument, output, exception,
-audit record, or durable receipt.
+Core billing lookup uses one frozen `encrypted_request` envelope sent to
+`recon_db_get_billing_candidates`. Its returned preparation and ephemeral
+private key follow the same restricted, one-time artifact rules. The agent
+cannot decrypt the request, author core SQL, or select physical database
+columns; mapping and query ownership remain in versioned MCP code/config.
 
-Durable download receipts contain only provider, space, filename, local path,
-byte count, SHA-256, sanitized index identity, preparation receipt hash, and
-timestamp.
+`recon_db_read_query` is allowed only for a bounded exception investigation or
+controlled diagnostic. The request must be read-only, scoped to known
+unresolved line IDs, limited by row/time/query budgets, and audited without raw
+parameter values.
 
-## Non-SharePoint Secrets
+The current report-only policy does not call database persistence or
+accepted-resolution update tools. Their skipped status is recorded in the run
+policy and audit.
 
-- Database DSNs and credentials stay in the database MCP service environment or
-  approved runtime secret boundary.
-- Provider API credentials stay in provider-specific secret bindings.
+## Other Secret Boundaries
+
+- Provider API credentials remain in provider-specific service bindings.
 - Outlook credentials remain in the native Outlook connection.
-- Do not store tokens, tickets, signed URLs, SAS links, passwords, provider
-  keys, or transient SharePoint links in durable artifacts. Customer query
-  values may exist only in a frozen MCP request while its run is paused; delete
-  the request and temporary receipts after successful resume, retaining hashes
-  and sanitized logs.
+- Never persist tokens, tickets, signed URLs, SAS links, passwords, provider
+  keys, raw database parameters, or transient SharePoint links.
+- Frozen MCP requests and unchanged temporary preparations exist only while a
+  run is paused and are disposed after successful resume according to their
+  contract; durable records retain only sanitized hashes and audit metadata.
 
 ## Access Order
 
 SharePoint:
 
-1. SharePoint Intake MCP for capability, probe, index, prepare, and read-only
-   binary verification.
+1. SharePoint Intake MCP for capability, probe, index, preparation, and
+   read-only binary verification.
 2. Native SharePoint for controlled move and upload.
-3. No direct Graph or browser fallback in the runtime path.
+3. No direct Graph, browser, or loose-script fallback in the runtime path.
 
 Invoices:
 
 1. Approved provider API where implemented and enabled.
 2. Manual SharePoint upload otherwise.
-3. A separately approved portal acquisition may place a package into upload
-   space, but the run still uses `manual_upload`.
+3. A separately approved portal process may place a package in upload space,
+   after which the run still uses `manual_upload`.
 
 Database:
 
-1. Approved database MCP tools when bound.
-2. Guarded script connector only in an approved runtime.
-3. No free-form database client, browser query, or agent-generated update.
+1. `recon_db_get_billing_candidates` for the normal reconciliation lookup.
+2. Bounded `recon_db_read_query` only for exception investigation or an
+   approved diagnostic.
+3. No free-form database client, model-authored core SQL, direct credential
+   access, or agent-generated update.

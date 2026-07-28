@@ -1,6 +1,6 @@
 # Telstra Provider Runtime Notes
 
-Adapter boundary: `scripts/provider_adapters/telstra/`
+Runtime boundary: the installed `nexon-recon parse --provider Telstra` command.
 
 ## Accepted Input
 

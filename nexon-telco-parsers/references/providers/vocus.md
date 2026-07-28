@@ -1,6 +1,6 @@
 # Vocus Provider Runtime Notes
 
-Adapter boundary: `scripts/provider_adapters/vocus/`
+Runtime boundary: the installed `nexon-recon parse --provider Vocus` command.
 
 ## Accepted Input
 

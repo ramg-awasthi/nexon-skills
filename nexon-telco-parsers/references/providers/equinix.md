@@ -1,6 +1,6 @@
 # Equinix Provider Runtime Notes
 
-Adapter boundary: `scripts/provider_adapters/equinix/`
+Runtime boundary: the installed `nexon-recon parse --provider Equinix` command.
 
 ## Accepted Input
 

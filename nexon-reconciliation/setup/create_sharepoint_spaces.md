@@ -1,6 +1,6 @@
-# One-Time Setup Checklist
+# One-Time SharePoint Setup
 
-## SharePoint Spaces
+## Folder Structure
 
 On the dedicated `Nexon Reconciliation Automation` site, create:
 
@@ -21,33 +21,33 @@ Megaport
 Equinix
 ```
 
-Reference provider folders are optional and should exist only when a fixture is
-onboarded for that provider. Do not create empty reference folders merely to
-satisfy parser validation; the SharePoint Intake MCP reports the missing
-fixture folder cleanly.
+Create a provider folder under `sample-invoices` only when a harmless parser
+fixture is onboarded for that provider. An absent reference folder is reported
+as `sharepoint_folder_not_found`; it is not a connectivity failure and must not
+be created by a normal run.
 
-Do not reuse a personal OneDrive folder, the historical `Recon` tree, or
-another business site.
+Do not reuse a personal OneDrive folder, the historical `Recon` tree, or an
+unrelated business site. Folder creation is a one-time administrator action,
+not a routine agent capability.
 
 ## Permissions
 
-SharePoint Intake MCP:
+SharePoint Intake MCP receives read-only access to the exact site and may list
+approved roots and read binary content. It must not create, update, move,
+delete, share, or manage permissions.
 
-- read-only access to the exact site;
-- permission to list approved roots and read binary content;
-- no create, update, move, delete, share, or permission-management capability.
+The native SharePoint connection may:
 
-Native SharePoint connection:
+- list the approved site and folders;
+- move the exact staged operational source into its result run folder;
+- upload the frozen result artifacts.
 
-- list the configured site and folders;
-- move exact operational sources into result run folders;
-- upload result artifacts;
-- no routine permission changes, sharing, or unrelated deletion.
+It must not make routine permission changes, create share links, or delete
+unrelated content.
 
-## MCP Runtime
+## Runtime Binding
 
-Bind one environment-appropriate SharePoint Intake MCP connection exposing
-exactly:
+Bind the environment-appropriate SharePoint Intake MCP connection exposing:
 
 ```text
 recon_sp_get_capabilities
@@ -57,47 +57,36 @@ recon_sp_prepare_download
 recon_sp_prepare_reference_test
 ```
 
-Configure the exact gateway hostname in
-`sharepoint_intake.environment` and `sharepoint_intake.gateway_host`. The
-service download endpoint is HTTPS `/download`. A decrypted one-time ticket is
-accepted only in
-`X-Recon-Download-Ticket`.
-
-Keep the SharePoint application credential and attestation-signing material in the
-MCP service environment. Do not configure a Graph access profile in Fleet.
+The MCP service owns the SharePoint application credential, site/drive
+resolution, approved gateway, download endpoint, and attestation key. Do not
+configure a Graph access profile for the Fleet agent and do not place these
+values in skill text or runtime arguments.
 
 ## Validation
 
-1. Call `recon_sp_get_capabilities`; save the unchanged
-   `{schema_version: "1.0", kind: "capabilities", result: ...}` envelope.
-2. Call `recon_sp_probe`; save the unchanged
-   `{schema_version: "1.0", kind: "probe", result: ...}` envelope.
-3. Run:
+1. Save unchanged outputs from `recon_sp_get_capabilities` and
+   `recon_sp_probe`.
+2. Run the packaged preflight command:
 
 ```text
-python skills/nexon-reconciliation/scripts/preflight_check.py \
-  --config skills/nexon-reconciliation/config/recon_settings.yaml \
+nexon-recon preflight \
+  --run-mode parser_validation \
+  --intake-mode manual_upload \
+  --provider <provider> \
   --sharepoint-mcp-capabilities <capabilities.json> \
   --sharepoint-mcp-probe <probe.json> \
   --output <runtime_capabilities.json>
 ```
 
-4. For each provider being validated, onboard one harmless fixture in its
-   reference folder. Providers without fixtures are skipped cleanly.
-5. Use `recon_sp_prepare_reference_test` and
-   `fetch_intake_artifact.py` to prove ZIP/PDF/XLSX binary integrity without
-   moving or modifying the fixture.
-6. Confirm the transient preparation file is deleted before redemption.
-7. Upload and move harmless setup artifacts with native SharePoint.
-8. Re-index and re-download the result artifacts through MCP to prove the
-   publication verification path.
+3. Index one onboarded reference fixture for the selected provider.
+4. Use `recon_sp_prepare_reference_test` and `nexon-recon fetch` to prove
+   ZIP/PDF/XLSX binary integrity without moving or modifying the fixture.
+5. Confirm the private key and preparation are disposed before ticket
+   redemption.
+6. Upload and move harmless setup artifacts with native SharePoint.
+7. Re-index and re-download the result artifacts through MCP to verify the
+   publication path.
 
-For local-only folder validation:
-
-```text
-python skills/nexon-reconciliation/scripts/preflight_check.py \
-  --config skills/nexon-reconciliation/config/recon_settings.yaml \
-  --local-check
-```
-
-Local validation does not create or mutate SharePoint folders.
+Normal runs validate that the folders already exist and fail closed when an
+operational upload or result folder is missing. They never create or repair the
+SharePoint structure.
