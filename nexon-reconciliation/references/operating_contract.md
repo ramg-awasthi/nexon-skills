@@ -134,6 +134,8 @@ explicit report/exception rows rather than silently dropped.
 
 ## Failure Contract
 
+Resolve config intent against capability first: disabled optional features are
+skipped, while enabled unavailable or required unavailable features block.
 Required capability, probe, index, preparation, fetch, parsing, candidate,
 matching, report, publication, and re-download failures stop the run. Missing
 optional reference fixtures map to `sharepoint_folder_not_found` and do not
