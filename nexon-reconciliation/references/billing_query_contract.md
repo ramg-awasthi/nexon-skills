@@ -90,8 +90,8 @@ unresolved. Billing-only rows are retained in the reports and exception set.
 Invoice-derived effective periods scope the candidate lookup. A production
 mismatch between requested and invoice periods fails closed. A historical
 non-production fixture may proceed only with an explicit test-override reason
-and actor recorded in the audit; the invoice-derived periods remain the query
-scope.
+and actor plus a timezone-aware future expiry recorded in the audit; the
+invoice-derived periods remain the query scope.
 
 ## Exception Diagnostic SQL
 

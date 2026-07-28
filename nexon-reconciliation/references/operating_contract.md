@@ -16,8 +16,8 @@ validation; `failed` is terminal.
 
 Stage order:
 
-1. source staging
-2. run creation
+1. source staging and source claim for manual-upload reconciliation
+2. run creation from the authoritative claimed run ID when a claim exists
 3. archive validation
 4. provider parsing and source accounting
 5. billing-candidate preparation
@@ -33,9 +33,10 @@ Stage order:
 ## Durable And Transient Artifacts
 
 Manual SharePoint intake durably retains unchanged capability/probe envelopes,
-a sanitized download receipt, the staged source, and its SHA-256. The encrypted
-preparation, ephemeral private key, and decrypted ticket are transient and must
-not become run artifacts.
+a sanitized download receipt, the source-claim request/receipt for
+reconciliation, the staged source, and its SHA-256. The encrypted preparation,
+ephemeral private key, and decrypted ticket are transient and must not become
+run artifacts.
 
 Every run contains its run, audit, parser, unpack, warning, normalized-line,
 runtime-identity, and frozen-settings artifacts. Reconciliation also records
@@ -69,6 +70,19 @@ verification.
 The agent never writes core billing SQL. Provider identifier precedence and
 physical schema mappings live in versioned, tested Database MCP code/config.
 
+## Source Claim
+
+Manual-upload reconciliation must claim the source through
+`recon_db_claim_source` before local run creation. The claim is prepared only
+by `nexon-recon lifecycle-mcp prepare-source-claim` from the attested download
+receipt, runtime identity, Database MCP capabilities, and SharePoint MCP
+capabilities. The supervisor sends the unchanged request object to the MCP,
+saves the unchanged receipt, and starts `nexon-recon run` with both files.
+
+The local run ID comes from the authoritative claim receipt. If the claim
+response does not match environment, provider, source identity, run purpose,
+source move mode, or active owned lease, the run stops before parsing.
+
 ## Report-Only Persistence
 
 `core_persistence` and `accepted_resolution_update` follow the active runtime
@@ -101,9 +115,10 @@ the core candidate operation or invent invoice rows.
 
 `awaiting_publication` freezes local paths, result-relative paths, and
 checksums. Native SharePoint uploads the exact result set and moves the manual
-source only after successful staging. The native receipt is sanitized. Every
-published artifact and moved source is then re-indexed, prepared, downloaded,
-and compared by relative path and SHA-256 before completion.
+source only after successful publication upload. The native receipt is
+sanitized. Every published artifact and moved source is then re-indexed,
+prepared, downloaded, and compared by relative path and SHA-256 before
+completion.
 
 ## Status And Matching Rules
 

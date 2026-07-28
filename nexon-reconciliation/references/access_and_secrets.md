@@ -25,9 +25,9 @@ identity internally. These values and Graph credentials do not enter prompts,
 skills, agent memory, reports, or durable manifests.
 
 Native SharePoint is independently authorized for exact source moves after
-successful staging, result uploads, and setup-time folder validation. Do not
-use native text reads for binary files, create share links, change permissions,
-or delete unrelated items.
+verified publication upload, result uploads, and setup-time folder validation.
+Do not use native text reads for binary files, create share links, change
+permissions, or delete unrelated items.
 
 ## One-Time SharePoint Transfer
 
