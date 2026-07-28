@@ -1,6 +1,6 @@
 # AAPT Provider Runtime Notes
 
-Adapter boundary: `scripts/provider_adapters/aapt/`
+Runtime boundary: the installed `nexon-recon parse --provider AAPT` command.
 
 ## Accepted Input
 

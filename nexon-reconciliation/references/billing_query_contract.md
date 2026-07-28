@@ -1,76 +1,112 @@
-# Billing Query Contract
+# Billing Candidate Contract
 
-Use only the approved reconciliation database through a read-only identity. Direct Inomial PostgreSQL requires separate approval.
+## Core Rule
 
-## Mandatory Configuration
-
-```yaml
-billing:
-  mode: read_only_sql
-  agent_sql_allowed: true
-  audit_required: true
-```
-
-`features.billing_query_enabled` must also be true.
-
-## Execution Boundary
-
-Fleet billing lookup uses only `recon_db_read_query` through the frozen
-request/receipt handoff emitted by `run_recon.py`. `scripts/billing_query.py`
-is retained only as the deterministic `--local-only` test adapter.
-
-It enforces:
-
-- one `SELECT` or `WITH`;
-- approved schema-qualified tables;
-- no write, DDL, admin, execution, copy, or `SELECT INTO`;
-- named parameters;
-- configured timeout and row cap;
-- provider/account/period grouping;
-- configured rows per chunk;
-- one sanitized query log record per chunk.
-
-Supported runtime modes:
-
-- `sqlite` for local fixtures;
-- `sqlserver` or `azure_sql` for the reconciliation database;
-- approved PostgreSQL mode only as a separate integration.
-
-## Chunk Parameters
-
-The command owns these scope parameters:
+Core reconciliation uses one deterministic Database MCP operation:
 
 ```text
-:provider
-:provider_account
-:billing_period_start
-:billing_period_end
-:service_ids_json
+recon_db_get_billing_candidates_v1
 ```
 
-The supplied query must project canonical `provider`, `provider_account`, `transaction_date`, and `service_id` fields. The command wraps it with provider/account/period/service filtering, using `OPENJSON(:service_ids_json)` for Azure SQL or the runtime-equivalent JSON expansion. Do not concatenate identifiers into SQL.
+The agent does not author, edit, repair, or retry core billing SQL. The Database
+MCP owns the versioned physical-column mapping, provider identifier precedence,
+read-only query, schema validation, transaction isolation, row limits, and
+sanitized audit receipt. Dev and prod may bind to different schemas, but they
+must implement the same contract and declare their mapping version and schema
+fingerprint.
 
-The query must return a service identifier such as `service_id`, `carrier_service_id`, `circuit_id`, or `line_number` so results can be assigned back to known invoice rows. Project a stable source identity as `candidate_id` whenever the source exposes one, such as a transaction UUID or existing billing-row ID. If absent, the tool derives a deterministic content hash; it never uses a line-local sequence as identity.
+## Frozen Encrypted Request
 
-## Approved Tables
+After deterministic parsing and billing-period resolution, `nexon-recon run`
+emits one `billing_candidate_plan.json` and pauses as
+`awaiting_billing_candidates`. The plan exposes only:
 
-- `dbo.inomialServiceMetaData`
-- `dbo.inomialTransactionData`
-- `Finance.inomialServiceMetaData`
-- `Finance.inomialTransactionData`
-- `Finance.GenericNexonBilling`
-- `Finance.BillingSystem`
-- `Finance.ServiceProvider`
-- `Finance.ServiceProviderAccount`
+- `request_identity`: non-secret environment, run ID, and mapping version for
+  sanity checks;
+- `encrypted_request`: the exact opaque envelope to send to the Database MCP.
 
-Queries referencing other tables fail closed until code ownership explicitly approves them.
+The plaintext request is built inside the deterministic runtime and encrypted
+before the agent sees it. It contains:
 
-## Candidate Output
+- environment and run ID;
+- provider;
+- typed account values: supplier invoice account, service-provider account,
+  and metadata account;
+- requested, invoice-derived, and effective billing periods;
+- normalized invoice-line identities and provider service identifiers;
+- requested mapping version;
+- idempotency key;
+- ephemeral recipient public key.
 
-Return only fields required to evaluate service, provider, account, invoice, date, subscription, customer, amount, and conflict evidence. Never return credentials or secret-bearing columns.
+Call `recon_db_get_billing_candidates_v1` exactly once with one argument only:
 
-The runtime converts results into `candidates_by_line` and derives conservative boolean evidence. Query logs contain SQL hash, parameter-key metadata, parameter-value hashes, duration, row count, row limit, and timeout. They never contain raw SQL parameters.
+```text
+{"encrypted_request": <exact encrypted_request object from billing_candidate_plan.json>}
+```
 
-## Investigator Loop
+Do not decrypt, summarize, rewrite, split, or inspect the encrypted request. Do
+not translate field names, add guessed columns, generate SQL chunks, or replace
+it with `recon_db_read_query`.
 
-The investigator may propose an additional read-only query but cannot execute it. The supervisor validates and executes it through this command with `--exception-input`, `--line-ids-file`, `--query-round`, and `--query-budget`, then returns candidates and query-log identity. The line IDs must be a known unresolved subset. Query rounds are sequential, appended to the same audit log, and bounded by the configured limit.
+## Opaque Response And Resume
+
+Save the entire unchanged MCP response as a restricted temporary preparation,
+then resume:
+
+```text
+nexon-recon resume \
+  --resume-run-root <run_root> \
+  --billing-candidate-preparation <candidate_preparation.json> \
+  --output <result.json>
+```
+
+The runtime retrieves the one-time opaque artifact and verifies its envelope,
+ticket binding, endpoint, size, SHA-256, Ed25519 attestation, environment, run
+ID, mapping version, schema contract/fingerprint, input hash, account identity,
+candidate identities, and line associations. Matching does not begin if any
+binding differs.
+
+The durable audit record contains hashes, versions, table identities, row
+counts, limits, and timing. It contains no credentials, raw parameter values,
+decrypted ticket, or model-authored SQL.
+
+## Candidate Semantics
+
+The MCP returns both:
+
+- supplier-linked candidates associated with known invoice lines; and
+- billing-only candidates that have no supplier line in the current invoice.
+
+Each line association declares its retrieval rule, rule status, candidate IDs,
+candidate count, and whether automatic matching is authorized. The runtime may
+auto-match only verified rules with complete deterministic evidence.
+Provisional, zero-match, multi-match, and conflicting evidence remains
+unresolved. Billing-only rows are retained in the reports and exception set.
+
+## Billing Period
+
+Invoice-derived effective periods scope the candidate lookup. A production
+mismatch between requested and invoice periods fails closed. A historical
+non-production fixture may proceed only with an explicit test-override reason
+and actor recorded in the audit; the invoice-derived periods remain the query
+scope.
+
+## Exception Diagnostic SQL
+
+`recon_db_read_query` is not part of normal candidate retrieval. It may be used
+only after deterministic comparison for an exception investigation or
+controlled diagnostic. Each call must be bound to the run, investigation case,
+known unresolved line IDs, approved schemas, named parameters, row/time limits,
+and a finite query budget.
+
+The diagnostic query is read-only and rejects writes, DDL, execution, copy,
+wildcard projection, comments, and `SELECT INTO`. Its result is evidence for
+the unresolved subset only; it cannot create invoice rows, weaken matching
+authority, or update the database.
+
+## Report-Only Persistence
+
+Core persistence and accepted-resolution updates follow the active runtime
+policy. When disabled, the runtime records both stages as skipped and continues
+with report-only matching, workbook generation, exception review, publication,
+and validation.

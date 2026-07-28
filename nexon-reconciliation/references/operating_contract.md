@@ -1,151 +1,129 @@
 # Runtime Operating Contract
 
-## Run States
+## Authority
 
-Run states are `created`, `running`, `completed`, and `failed`.
+The immutable snapshot supplies the `nexon-recon` command, packaged settings,
+dependencies, and provider code. Skills describe policy; they are not an
+executable source. The agent must not search for or execute loose Python files,
+provide a config path, install packages, or replace packaged behavior during a
+run.
 
-`completed` requires validation. `failed` is terminal. A run awaiting billing
-query execution, core persistence, exception investigation, or publication
-remains `running` with that stage set to `running`.
+## Run States And Stage Order
 
-## Stage Order
+Run states are `created`, `running`, `completed`, and `failed`. A pause remains
+`running` with its current stage marked `running`. `completed` requires final
+validation; `failed` is terminal.
+
+Stage order:
 
 1. source staging
 2. run creation
 3. archive validation
-4. provider parsing
-5. billing preparation
+4. provider parsing and source accounting
+5. billing-candidate preparation
 6. deterministic comparison
-7. atomic supplier and result persistence
+7. core persistence or audited report-only skip
 8. raw workbook
-9. exception investigation
+9. exception investigation when unresolved rows exist
 10. refined workbook
-11. publication
+11. publication and re-download verification
 12. validation
-13. notification
+13. notification when enabled
 
-## Source Artifacts
+## Durable And Transient Artifacts
 
-Manual SharePoint intake uses:
+Manual SharePoint intake durably retains unchanged capability/probe envelopes,
+a sanitized download receipt, the staged source, and its SHA-256. The encrypted
+preparation, ephemeral private key, and decrypted ticket are transient and must
+not become run artifacts.
 
-- unchanged SharePoint Intake MCP capability and probe envelopes;
-- a transient encrypted `prepared_download` envelope and ephemeral private key
-  deleted before redemption;
-- a durable sanitized `download_receipt.json`;
-- the locally staged package and its SHA-256.
+Every run contains its run, audit, parser, unpack, warning, normalized-line,
+runtime-identity, and frozen-settings artifacts. Reconciliation also records
+the billing-candidate contract identity, sanitized query receipt, matching
+evidence, reports, investigation evidence when applicable, and publication
+verification.
 
-The preparation envelope, private key, and decrypted one-time ticket are never
-run artifacts.
+## Billing-Candidate Pause
 
-Provider API intake uses its download/provenance manifest and checksum instead.
+`awaiting_billing_candidates` means:
 
-## Run Artifacts
+- `manifest/billing_candidate_plan.json` contains one non-secret
+  `request_identity` and one frozen `encrypted_request` envelope for
+  `recon_db_get_billing_candidates_v1`;
+- the encrypted plaintext is built only by the deterministic runtime and
+  includes typed provider accounts, invoice-derived effective periods,
+  normalized line identifiers, mapping version, idempotency key, and the
+  ephemeral recipient public key;
+- the supervisor calls the MCP operation exactly once with
+  `{"encrypted_request": <object>}` copied unchanged from the plan and saves
+  the entire unchanged response temporarily;
+- the same run resumes with `--billing-candidate-preparation`;
+- the runtime validates the response envelope, endpoint, ticket binding,
+  artifact hash/size, Ed25519 attestation, environment, run ID, mapping version,
+  schema contract/fingerprint, input hash, candidate identities, and per-line
+  associations before matching;
+- encrypted request, preparation, and private-key material are disposed
+  according to the one-time artifact contract, retaining only sanitized hashes
+  and audit data.
 
-Every run contains:
+The agent never writes core billing SQL. Provider identifier precedence and
+physical schema mappings live in versioned, tested Database MCP code/config.
 
-- `manifest/run_manifest.json`
-- `manifest/run_state.json`
-- `manifest/audit_manifest.json`
-- `manifest/parser_manifest.json`
-- `manifest/unpack_manifest.json`
-- `logs/parser_warnings.json`
-- `normalized/provider_lines.json`
+## Report-Only Persistence
 
-Fleet manual intake also freezes a sanitized
-`manifest/source_download_receipt.json`. It contains no endpoint, ticket,
-credential, URL, site ID, drive ID, or item ID.
+`core_persistence` and `accepted_resolution_update` follow the active runtime
+policy. When disabled, both stages are recorded as `skipped`; the run still
+performs billing lookup, deterministic matching, exception investigation where
+needed, raw/refined workbook generation, publication, and final validation. No
+persistence request is produced and no database write tool is called.
 
-Reconciliation adds applicable query, candidate, persistence, match, report,
-exception, and workbook artifacts.
+If persistence is enabled in a separately approved future policy, it must use
+its own explicit policy-controlled resume contract. It must never be inferred
+from Database MCP availability alone.
 
-## Pause States
+## Exception Investigation
 
-`awaiting_billing_query`:
+`awaiting_exception_investigation` contains known unresolved line IDs frozen
+for the run. The investigator may return evidence for only that set. Additional
+database lookup is allowed only through bounded `recon_db_read_query` with:
 
-- `manifest/billing_mcp_plan.json` freezes every bounded query request;
-- the supervisor calls `recon_db_read_query` once per request;
-- every unchanged response is supplied in chunk order;
-- the runtime verifies environment, run ID, query/parameter hashes, row count,
-  row limit, table identity, and response shape before creating candidates;
-- the request and temporary receipts are disposed after successful resume,
-  retaining only hashes and a sanitized query log.
+- a declared investigation case and run ID;
+- a known unresolved line-ID subset;
+- schema-qualified read-only SQL;
+- named parameters, row/time limits, and a finite query budget;
+- no writes, DDL, wildcard projection, comments, or `SELECT INTO`;
+- a sanitized audited receipt.
 
-`awaiting_core_persistence`:
+This diagnostic operation may refine unresolved evidence but may not replace
+the core candidate operation or invent invoice rows.
 
-- `manifest/database_persistence_request.json` freezes one hash-bound
-  lifecycle transaction;
-- the supervisor calls `recon_db_persist_run` once;
-- the runtime verifies environment, run ID, payload hash, persisted rows, and
-  persistence manifest before generating reports;
-- the request and temporary receipt are disposed after successful resume,
-  retaining only hashes and committed persistence artifacts.
+## Publication Pause
 
-`awaiting_exception_investigation`:
+`awaiting_publication` freezes local paths, result-relative paths, and
+checksums. Native SharePoint uploads the exact result set and moves the manual
+source only after successful staging. The native receipt is sanitized. Every
+published artifact and moved source is then re-indexed, prepared, downloaded,
+and compared by relative path and SHA-256 before completion.
 
-- unresolved input is frozen;
-- only known line IDs may be returned;
-- resume the same run with the investigation artifact.
+## Status And Matching Rules
 
-`awaiting_publication`:
+The raw workbook preserves all current reconciliation fields and status values.
+The refined workbook preserves every raw field and adds the approved agent and
+human-review fields. A parser-only test cannot claim billing comparison,
+matching, reconciliation workbooks, or publication completion.
 
-- `manifest/publication_set.json` freezes local paths, relative paths, and
-  checksums;
-- native SharePoint upload and optional source move are pending;
-- create a sanitized native `publication_receipt.json`;
-- re-index and re-download the exact result artifacts through the same MCP
-  index/prepare/fetch flow;
-- resume with every result-space download receipt.
+Auto-match requires a verified mapping rule and deterministic provider,
+account, service, period, and cardinality evidence. Provisional rules and
+ambiguous candidates require review. Billing-only candidates are retained as
+explicit report/exception rows rather than silently dropped.
 
-Completion requires exact equality across publication set, native receipt, and
-MCP re-download paths/checksums.
+## Failure Contract
 
-## Status Separation
+Required capability, probe, index, preparation, fetch, parsing, candidate,
+matching, report, publication, and re-download failures stop the run. Missing
+optional reference fixtures map to `sharepoint_folder_not_found` and do not
+trigger folder creation or notification.
 
-The raw workbook preserves current `ReconMatchStatus` values. Agent status and
-human verification fields exist only in the refined report.
-
-A parser-only test is not a reconciliation run. It cannot claim customer
-matching, billing comparison, persistence, raw/refined reconciliation
-workbooks, or publication completion.
-
-## Full-Run Gate
-
-Resolve config intent against capability first: disabled optional features are
-skipped, while enabled unavailable or required unavailable features block.
-Stop with `core_reconciliation_not_available` when the resulting policy has a
-blocker. SharePoint Intake MCP must pass capability, probe, index, preparation,
-binary fetch, and result re-download checks. Native SharePoint must separately
-pass move and upload checks. Nexon Recon Database MCP must pass capability and probe
-checks and advertise read queries plus core persistence when enabled.
-
-Equinix one-to-many behavior remains provider evidence, not a reason to weaken
-global cardinality rules.
-
-## Failure Codes
-
-Representative controlled failures:
-
-- `sharepoint_mcp_required`
-- `sharepoint_mcp_invalid`
-- `intake_preparation_invalid`
-- `intake_preparation_expired`
-- `intake_preparation_disposal_failed`
-- `intake_download_failed`
-- `source_download_receipt_required`
-- `download_receipt_invalid`
-- `source_not_found`
-- `source_ambiguous`
-- `unsafe_archive`
-- `provider_api_not_available`
-- `core_reconciliation_not_available`
-- `investigation_invalid`
-- `publication_invalid`
-
-Failure detail must be sanitized and must never contain preparation content,
-endpoint, ticket, Graph identity, credential, or customer-sensitive SQL
-parameter values.
-
-For reference-only parser validation, SharePoint Intake MCP
-`status=sharepoint_folder_not_found` maps to `source_not_found`. It is an
-optional fixture gap, not a connectivity failure, and must not trigger folder
-creation or failure notification.
+Failure detail must never contain preparation content, endpoint, ticket,
+private key, Graph identity, database credential, raw SQL parameters, or other
+secret material.

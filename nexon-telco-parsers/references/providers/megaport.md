@@ -1,6 +1,6 @@
 # Megaport Provider Runtime Notes
 
-Adapter boundary: `scripts/provider_adapters/megaport/`
+Runtime boundary: the installed `nexon-recon parse --provider Megaport` command.
 
 ## Accepted Input
 

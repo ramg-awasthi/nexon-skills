@@ -1,162 +1,66 @@
 ---
 name: nexon-telco-parsers
-description: Deterministic Nexon telco invoice parser contract for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix. Use when routing provider invoice files to supported parser adapters, validating parser outputs, checking provider parser input contracts, or handling parser warnings; adapters fail closed for unsupported formats, missing libraries, or malformed inputs.
+description: Apply deterministic, provider-specific invoice extraction for AAPT, Telstra, Optus, Vocus, Megaport, and Equinix through the installed Nexon reconciliation runtime.
 ---
 
 # Nexon Telco Parsers
 
-Use this skill for provider invoice extraction.
+Use this skill for provider extraction behavior. The skill contains guidance
+only. All parser code, libraries, mappings, and tests are bundled in the
+immutable snapshot and invoked through `nexon-recon`; never search for or run a
+parser from the skill directory.
 
-## Supported Parser Inputs
+## Rules
 
-Supported deterministic adapters:
+- Provider selection is explicit. File extension alone never selects a
+  provider.
+- Archive validation precedes parsing. ZIP handling is shared and safe; the
+  provider adapter receives only validated members.
+- AAPT, Telstra, Vocus, Megaport, and Equinix have isolated adapters behind the
+  common command. Optus intentionally has separate PDF and Excel/voice routes
+  behind its adapter.
+- Parser output must be reproducible from the same bytes and runtime identity.
+- Never create invoice rows with a model, repair malformed input creatively,
+  infer missing financial values, or silently drop unsupported rows.
+- Preserve typed account meanings: supplier invoice account, service-provider
+  lookup account, metadata account, and customer billing account.
+- Emit stable line IDs, invoice/service identifiers, billing windows, amounts,
+  source provenance, warnings, and accounting.
 
-- AAPT ZIP.
-- Telstra CSV.
-- Optus PDF.
-- Optus voice ZIP/DAT.
-- Vocus CSV.
-- Megaport CSV.
-- Equinix XLSX.
+## Invocation
 
-Unsupported input families must fail closed with a parser warning. Do not ask the model to parse unsupported invoice formats.
-
-## Scope
-
-This skill owns deterministic invoice line extraction only.
-
-It does not own:
-
-- reconciliation orchestration;
-- SharePoint run folder movement;
-- billing/Inomial lookup;
-- matching;
-- raw/refined report writing;
-- exception investigation;
-- database update.
-
-## Non-Negotiable Rules
-
-- Use deterministic provider adapter code for invoice extraction.
-- Do not parse invoices with free-form model reasoning.
-- Do not invent invoice rows.
-- Do not infer or invent missing invoice rows.
-- Do not query billing/Inomial.
-- Do not perform customer matching.
-- Do not write reports directly.
-- Do not write to the database.
-- Keep one adapter area per provider; do not create one skill per telco.
-
-## Parser Entry Point
-
-Use:
+Normal operation uses `nexon-recon run`, which routes the provider adapter and
+freezes its output. For an isolated deterministic parser check use:
 
 ```text
-python skills/nexon-telco-parsers/scripts/parse_provider_invoice.py --config skills/nexon-reconciliation/config/recon_settings.yaml --provider <provider> --input-dir <dir> --output <json> --warnings <json> --run-id <run_id> --manifest <json>
+nexon-recon parse \
+  --provider <provider> \
+  --input-dir <validated_source_directory> \
+  --output <provider_lines.json> \
+  --warnings <parser_warnings.json> \
+  --run-id <run_id>
 ```
 
-The command routes through:
+Do not supply a config path or module path.
 
-```text
-scripts/parser_core/parse_provider_invoice.py
-```
+## Accounting Gate
 
-Then to:
+Every result must distinguish:
 
-```text
-scripts/provider_adapters/<provider>/
-```
+- all raw source rows;
+- charge-bearing input rows;
+- reference/header rows;
+- aggregation input and output rows;
+- deliberately suppressed rows with reason;
+- passthrough rows;
+- final normalized rows;
+- input/output financial totals and any non-enforced header total.
 
-Only `scripts/parser_core/parse_provider_invoice.py` executes parser-routing decisions. The route description below documents that code-owned behavior; agents must not reproduce or override it.
+The accounting equation and financial checks must pass. Parser warnings are
+data-quality evidence and cannot be hidden. A missing required member, unknown
+layout, ambiguous route, or invalid financial value fails closed with a stable
+code.
 
-Optus intentionally has two isolated adapter modules under one provider folder: `scripts/provider_adapters/optus/parser_pdf.py` and `scripts/provider_adapters/optus/parser_excel_voice.py`. The common router selects between them by source package shape: PDF-only packages use `optus_pdf`, voice ZIP/DAT packages use `optus_excel_voice`, unsupported file types fail closed, and mixed PDF plus voice packages fail as ambiguous. Do not move this decision into skill prompt logic, runtime config, the supervisor prompt, or a merged Optus parser.
-
-## Provider Adapter Layout
-
-```text
-scripts/provider_adapters/
-  aapt/parser.py
-  telstra/parser.py
-  optus/parser_pdf.py
-  optus/parser_excel_voice.py
-  vocus/parser.py
-  megaport/parser.py
-  equinix/parser.py
-```
-
-Parser routing is code-owned and must not be moved into runtime config.
-
-## Parser Contract
-
-Input:
-
-- provider;
-- mandatory run id;
-- source or extracted file path;
-- shared runtime config from `../nexon-reconciliation/config/recon_settings.yaml` for feature flags and common policies only. Provider parser routing is code-owned.
-
-Output:
-
-- normalized invoice line JSON at `<run_root>/normalized/provider_lines.json`;
-- parser warning JSON list at `<run_root>/logs/parser_warnings.json`;
-- parser manifest JSON at `<run_root>/manifest/parser_manifest.json`.
-
-The normalized JSON must use this top-level shape:
-
-```json
-{
-  "headers": ["..."],
-  "invoice_headers": [
-    {
-      "invoice_identity": "...",
-      "request_key": "<run_id>:<invoice_identity>",
-      "provider": "AAPT",
-      "provider_account": "...",
-      "invoice_number": "...",
-      "billing_period_start": "...",
-      "billing_period_end": "...",
-      "currency": "AUD",
-      "source_members": ["..."]
-    }
-  ],
-  "lines": [
-    {
-      "line_id": "...",
-      "invoice_identity": "...",
-      "request_key": "...",
-      "provider": "AAPT",
-      "run_id": "...",
-      "source_file": "...",
-      "source_row": "...",
-      "service_id_raw": "...",
-      "service_id_normalized": "...",
-      "invoice_number": "...",
-      "billing_period_start": "...",
-      "billing_period_end": "...",
-      "amount": "..."
-    }
-  ],
-  "accounting": {
-    "source_rows_considered": 1,
-    "parsed_rows": 1,
-    "documented_exclusions": 0
-  }
-}
-```
-
-Every row must preserve traceability to source file and row/page/sheet when available. Every line references one `invoice_identity`. The parser manifest identifies consumed and skipped source members and must satisfy `source_rows = parsed_rows + documented_exclusions`.
-
-## Provider Notes
-
-Read the provider note before parser edits:
-
-- `references/providers/aapt.md`
-- `references/providers/telstra.md`
-- `references/providers/optus.md`
-- `references/providers/vocus.md`
-- `references/providers/megaport.md`
-- `references/providers/equinix.md`
-
-## Parser Availability
-
-If the adapter cannot parse the supplied package, emit a `parser_warning` artifact with `parser_unavailable` or `parser_failed` and exit non-zero. Do not guess, backfill, or infer invoice lines.
+Provider-specific evidence and known format boundaries are documented in
+`references/providers/`. Those references explain formats; they do not replace
+the executable adapter or authorize speculative behavior.

@@ -1,32 +1,53 @@
-# External References
+# Runtime Components
 
-## Skills And Runtime Tools
+## Declarative Skills
 
-- `nexon-reconciliation` owns orchestration contracts and deterministic run
-  scripts.
-- `nexon-telco-parsers` owns provider extraction.
-- SharePoint Intake MCP owns read-only source index/prepare and binary
-  attestation.
-- Native SharePoint owns controlled moves and uploads.
-- Nexon Recon Database MCP owns approved database capability.
-- Native Outlook owns text-only notifications.
+- `nexon-reconciliation` defines orchestration, safety gates, pause/resume
+  behavior, report rules, and human-review boundaries.
+- `nexon-telco-parsers` defines provider extraction expectations and accounting
+  rules.
 
-## SharePoint Runtime
+Skills do not contain the executable runtime. The immutable Fleet snapshot
+provides `nexon-recon`, packaged settings, dependencies, and provider modules.
+Operational instructions invoke that command only; they do not execute loose
+Python files, search mounted skill content, provide a config path, or install
+packages at run time.
 
-The five SharePoint Intake MCP tools are the only read path. The service keeps
-tenant, site, drive, item, and credential identities behind its boundary.
-`fetch_intake_artifact.py` consumes a transient encrypted preparation and
-ephemeral private key, refuses redirects, redeems the decrypted ticket through
-the exact environment-specific HTTPS `/download` endpoint, verifies the signed
-attestation, and emits a sanitized receipt.
+## SharePoint
 
-Native SharePoint remains the write path. Result publication is proven by
-reusing MCP index/prepare plus the generic fetcher against the exact result run
-folder. No separate publication-verification tool exists.
+SharePoint Intake MCP owns approved source indexing, one-time preparation, and
+attested binary transfer. Native SharePoint owns controlled source moves and
+result uploads. Result publication is verified by reusing the MCP
+index/prepare/fetch path against the exact frozen result set.
 
-## Observability
+Tenant, site, drive, item, application credential, ticket, and attestation
+private-key identities remain inside the relevant service boundary. The
+runtime retains only sanitized receipts and content hashes.
 
-Use run state, audit, query, parser, persistence, report, native publication,
-and sanitized download receipts. Never log preparation contents, download
-endpoint, ticket, Graph identity, credentials, or customer-sensitive SQL
-parameters.
+## Reconciliation Database
+
+Nexon Recon Database MCP owns the versioned core billing candidate operation:
+
+```text
+recon_db_get_billing_candidates_v1
+```
+
+The runtime submits one frozen `encrypted_request` envelope and resumes with
+the unchanged temporary preparation through `--billing-candidate-preparation`.
+Provider mappings and core SQL remain deterministic, tested MCP code/config.
+The bounded
+`recon_db_read_query` operation is available only for exception investigation
+and controlled diagnostics, never for normal candidate generation.
+
+The current report-only policy skips database persistence and
+accepted-resolution updates even when the MCP is reachable.
+
+## Notifications And Observability
+
+Native Outlook owns text-only failure notifications with no attachments.
+
+Use snapshot identity, run state, audit, parser accounting, candidate-contract,
+matching, exception, report, publication, and sanitized transfer receipts for
+observability. Never log preparations, tickets, download endpoints, private
+keys, Graph identities, database credentials, raw SQL parameter values, or
+provider secrets.

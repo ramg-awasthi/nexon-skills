@@ -1,6 +1,6 @@
 # Optus Provider Runtime Notes
 
-Adapter boundary: `scripts/provider_adapters/optus/`
+Runtime boundary: the installed `nexon-recon parse --provider Optus` command.
 
 ## Accepted Input
 
