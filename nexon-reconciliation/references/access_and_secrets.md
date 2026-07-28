@@ -53,7 +53,7 @@ environment. The Fleet agent receives only MCP operations and sanitized
 receipts.
 
 Core billing lookup uses one frozen `encrypted_request` envelope sent to
-`recon_db_get_billing_candidates_v1`. Its returned preparation and ephemeral
+`recon_db_get_billing_candidates`. Its returned preparation and ephemeral
 private key follow the same restricted, one-time artifact rules. The agent
 cannot decrypt the request, author core SQL, or select physical database
 columns; mapping and query ownership remain in versioned MCP code/config.
@@ -95,7 +95,7 @@ Invoices:
 
 Database:
 
-1. `recon_db_get_billing_candidates_v1` for the normal reconciliation lookup.
+1. `recon_db_get_billing_candidates` for the normal reconciliation lookup.
 2. Bounded `recon_db_read_query` only for exception investigation or an
    approved diagnostic.
 3. No free-form database client, model-authored core SQL, direct credential

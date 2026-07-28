@@ -49,7 +49,7 @@ verification.
 
 - `manifest/billing_candidate_plan.json` contains one non-secret
   `request_identity` and one frozen `encrypted_request` envelope for
-  `recon_db_get_billing_candidates_v1`;
+  `recon_db_get_billing_candidates`;
 - the encrypted plaintext is built only by the deterministic runtime and
   includes typed provider accounts, invoice-derived effective periods,
   normalized line identifiers, mapping version, idempotency key, and the

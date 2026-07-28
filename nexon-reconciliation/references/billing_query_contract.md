@@ -5,7 +5,7 @@
 Core reconciliation uses one deterministic Database MCP operation:
 
 ```text
-recon_db_get_billing_candidates_v1
+recon_db_get_billing_candidates
 ```
 
 The agent does not author, edit, repair, or retry core billing SQL. The Database
@@ -38,7 +38,7 @@ before the agent sees it. It contains:
 - idempotency key;
 - ephemeral recipient public key.
 
-Call `recon_db_get_billing_candidates_v1` exactly once with one argument only:
+Call `recon_db_get_billing_candidates` exactly once with one argument only:
 
 ```text
 {"encrypted_request": <exact encrypted_request object from billing_candidate_plan.json>}
@@ -50,8 +50,10 @@ it with `recon_db_read_query`.
 
 ## Opaque Response And Resume
 
-Save the entire unchanged MCP response as a restricted temporary preparation,
-then resume:
+Save the complete unchanged MCP response returned by
+`recon_db_get_billing_candidates` as a restricted temporary preparation, then
+resume. Do not save only `encrypted_request`, `request_identity`, a summary, or
+model-written reconstruction:
 
 ```text
 nexon-recon resume \

@@ -29,7 +29,7 @@ runtime retains only sanitized receipts and content hashes.
 Nexon Recon Database MCP owns the versioned core billing candidate operation:
 
 ```text
-recon_db_get_billing_candidates_v1
+recon_db_get_billing_candidates
 ```
 
 The runtime submits one frozen `encrypted_request` envelope and resumes with
