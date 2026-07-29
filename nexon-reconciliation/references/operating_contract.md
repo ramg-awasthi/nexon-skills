@@ -20,7 +20,7 @@ Stage order:
 2. run creation from the authoritative claimed run ID when a claim exists
 3. archive validation
 4. provider parsing and source accounting
-5. billing-candidate preparation
+5. billing-candidate request/response handoff
 6. deterministic comparison
 7. core persistence or audited report-only skip
 8. raw workbook
@@ -49,23 +49,20 @@ verification.
 `awaiting_billing_candidates` means:
 
 - `manifest/billing_candidate_plan.json` contains one non-secret
-  `request_identity` and one frozen `encrypted_request` envelope for
+  `request_identity` and one frozen plain `request` object for
   `recon_db_get_billing_candidates`;
-- the encrypted plaintext is built only by the deterministic runtime and
-  includes typed provider accounts, invoice-derived effective periods,
-  normalized line identifiers, mapping version, idempotency key, and the
-  ephemeral recipient public key;
+- the request is built only by the deterministic runtime and includes typed
+  provider accounts, invoice-derived effective periods, normalized line
+  identifiers, mapping version, and idempotency key;
 - the supervisor calls the MCP operation exactly once with
-  `{"encrypted_request": <object>}` copied unchanged from the plan and saves
-  the entire unchanged response temporarily;
-- the same run resumes with `--billing-candidate-preparation`;
-- the runtime validates the response envelope, endpoint, ticket binding,
-  artifact hash/size, Ed25519 attestation, environment, run ID, mapping version,
-  schema contract/fingerprint, input hash, candidate identities, and per-line
-  associations before matching;
-- encrypted request, preparation, and private-key material are disposed
-  according to the one-time artifact contract, retaining only sanitized hashes
-  and audit data.
+  the plain request fields copied unchanged from the plan and saves the
+  complete unchanged response temporarily;
+- the same run resumes with `--billing-candidate-response`;
+- the runtime validates the response schema, environment, run ID, mapping
+  version, schema contract/fingerprint, input hash, candidate identities, and
+  per-line associations before matching;
+- temporary request and response files are disposed according to run workspace
+  hygiene, retaining only sanitized hashes and audit data.
 
 The agent never writes core billing SQL. Provider identifier precedence and
 physical schema mappings live in versioned, tested Database MCP code/config.

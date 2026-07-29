@@ -15,18 +15,17 @@ sanitized audit receipt. Dev and prod may bind to different schemas, but they
 must implement the same contract and declare their mapping version and schema
 fingerprint.
 
-## Frozen Encrypted Request
+## Frozen Plain Request
 
 After deterministic parsing and billing-period resolution, `nexon-recon run`
 emits one `billing_candidate_plan.json` and pauses as
-`awaiting_billing_candidates`. The plan exposes only:
+`awaiting_billing_candidates`. The plan exposes:
 
 - `request_identity`: non-secret environment, run ID, and mapping version for
   sanity checks;
-- `encrypted_request`: the exact opaque envelope to send to the Database MCP.
+- `request`: the exact plain argument object to send to the Database MCP.
 
-The plaintext request is built inside the deterministic runtime and encrypted
-before the agent sees it. It contains:
+The request is built and frozen inside the deterministic runtime. It contains:
 
 - environment and run ID;
 - provider;
@@ -35,42 +34,50 @@ before the agent sees it. It contains:
 - requested, invoice-derived, and effective billing periods;
 - normalized invoice-line identities and provider service identifiers;
 - requested mapping version;
-- idempotency key;
-- ephemeral recipient public key.
+- idempotency key.
 
-Call `recon_db_get_billing_candidates` exactly once with one argument only:
+Call `recon_db_get_billing_candidates` exactly once with the unchanged request
+fields from the plan:
 
 ```text
-{"encrypted_request": <exact encrypted_request object from billing_candidate_plan.json>}
+{
+  "environment": <request.environment>,
+  "run_id": <request.run_id>,
+  "provider": <request.provider>,
+  "accounts": <request.accounts>,
+  "periods": <request.periods>,
+  "invoice_lines": <request.invoice_lines>,
+  "mapping_version": <request.mapping_version>,
+  "idempotency_key": <request.idempotency_key>
+}
 ```
 
-Do not decrypt, summarize, rewrite, split, or inspect the encrypted request. Do
-not translate field names, add guessed columns, generate SQL chunks, or replace
-it with `recon_db_read_query`.
+Do not summarize, rewrite, split, or inspect invoice details beyond what is
+needed to pass the unchanged request. Do not translate field names, add guessed
+columns, generate SQL chunks, or replace it with `recon_db_read_query`.
 
-## Opaque Response And Resume
+## Response And Resume
 
 Save the complete unchanged MCP response returned by
-`recon_db_get_billing_candidates` as a restricted temporary preparation, then
-resume. Do not save only `encrypted_request`, `request_identity`, a summary, or
+`recon_db_get_billing_candidates` as a restricted temporary response, then
+resume. Do not save only `request`, `request_identity`, a summary, or
 model-written reconstruction:
 
 ```text
 nexon-recon resume \
   --resume-run-root <run_root> \
-  --billing-candidate-preparation <candidate_preparation.json> \
+  --billing-candidate-response <candidate_response.json> \
   --output <result.json>
 ```
 
-The runtime retrieves the one-time opaque artifact and verifies its envelope,
-ticket binding, endpoint, size, SHA-256, Ed25519 attestation, environment, run
-ID, mapping version, schema contract/fingerprint, input hash, account identity,
-candidate identities, and line associations. Matching does not begin if any
-binding differs.
+The runtime verifies the MCP response schema, environment, run ID, mapping
+version, schema contract/fingerprint, input hash, account identity, candidate
+identities, and line associations. Matching does not begin if any binding
+differs.
 
 The durable audit record contains hashes, versions, table identities, row
 counts, limits, and timing. It contains no credentials, raw parameter values,
-decrypted ticket, or model-authored SQL.
+full invoice lines, account details, or model-authored SQL.
 
 ## Candidate Semantics
 

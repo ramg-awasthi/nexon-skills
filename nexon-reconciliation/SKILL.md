@@ -18,9 +18,9 @@ to `nexon-recon-exception-investigator`.
 - Never infer invoice rows or author core billing SQL.
 - Use SharePoint Intake MCP for source index and binary preparation; use native
   SharePoint only for result uploads and the proven source move.
-- Use `recon_db_get_billing_candidates` once with only the runtime's frozen
-  `encrypted_request` envelope. Use `recon_db_read_query` only for bounded
-  exception evidence.
+- Use `recon_db_get_billing_candidates` once with the runtime's frozen plain
+  `request` object from the `billing_candidate_plan`. Use `recon_db_read_query`
+  only for bounded exception evidence.
 - For manual-upload reconciliation, use `recon_db_claim_source` before the
   local run is created. Call lifecycle tools only from runtime-emitted requests;
   never invent source claims or transitions.
@@ -49,12 +49,11 @@ to `nexon-recon-exception-investigator`.
    reconciliation never uses `--copy` or `--local-only` and must include the
    source claim request/receipt for manual-upload intake.
 7. On `awaiting_billing_candidates`, call
-   `recon_db_get_billing_candidates` exactly once with a single
-   `encrypted_request` argument copied unchanged from the
-   `billing_candidate_plan`, save the complete unchanged MCP response returned
-   by the tool, and use
+   `recon_db_get_billing_candidates` exactly once with the plain `request`
+   object copied unchanged from the `billing_candidate_plan`, save the complete
+   unchanged MCP response returned by the tool, and use
    `nexon-recon resume
-   --billing-candidate-preparation ...`.
+   --billing-candidate-response ...`.
 8. Allow auto-match only for a verified deterministic rule with service,
    provider, and period evidence. Route zero, multiple, provisional, and
    billing-only cases to the exception workflow.
