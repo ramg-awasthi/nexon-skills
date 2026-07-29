@@ -52,11 +52,13 @@ Database credentials and DSNs remain exclusively in the Database MCP service
 environment. The Fleet agent receives only MCP operations and sanitized
 receipts.
 
-Core billing lookup uses one frozen `encrypted_request` envelope sent to
-`recon_db_get_billing_candidates`. Its returned preparation and ephemeral
-private key follow the same restricted, one-time artifact rules. The agent
-cannot decrypt the request, author core SQL, or select physical database
-columns; mapping and query ownership remain in versioned MCP code/config.
+Core billing lookup uses one frozen plain `request` object sent unchanged to
+`recon_db_get_billing_candidates`. The agent cannot author core SQL, add
+identifiers, split batches, or select physical database columns; mapping and
+query ownership remain in versioned MCP code/config. Fleet must not log full
+invoice lines, account details, credentials, DSNs, SQL parameters, or raw MCP
+response payloads; Database MCP server-side request logging follows its own
+audited service contract.
 
 `recon_db_read_query` is allowed only for a bounded exception investigation or
 controlled diagnostic. The request must be read-only, scoped to known
@@ -73,9 +75,10 @@ policy and audit.
 - Outlook credentials remain in the native Outlook connection.
 - Never persist tokens, tickets, signed URLs, SAS links, passwords, provider
   keys, raw database parameters, or transient SharePoint links.
-- Frozen MCP requests and unchanged temporary preparations exist only while a
-  run is paused and are disposed after successful resume according to their
-  contract; durable records retain only sanitized hashes and audit metadata.
+- Frozen MCP requests, temporary billing responses, and unchanged SharePoint
+  preparations exist only while a run is paused and are disposed after
+  successful resume according to their contract; durable records retain only
+  sanitized hashes and audit metadata.
 
 ## Access Order
 

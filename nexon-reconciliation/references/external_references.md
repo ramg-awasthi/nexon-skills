@@ -36,9 +36,9 @@ recon_db_get_billing_candidates
 
 The runtime prepares source-claim and transition requests; the supervisor sends
 them unchanged and preserves receipts. For billing candidates, the runtime
-submits one frozen `encrypted_request` envelope and resumes with the unchanged
-temporary preparation through `--billing-candidate-preparation`. Provider
-mappings and core SQL remain deterministic, tested MCP code/config.
+submits one frozen plain `request` object and resumes with the unchanged MCP
+response through `--billing-candidate-response`. Provider mappings and core SQL
+remain deterministic, tested MCP code/config.
 The bounded
 `recon_db_read_query` operation is available only for exception investigation
 and controlled diagnostics, never for normal candidate generation.
