@@ -72,6 +72,11 @@ policy and audit.
 ## Other Secret Boundaries
 
 - Provider API credentials remain in provider-specific service bindings.
+- Invoice Intake MCP receipts are sanitized source provenance only:
+  provider, account, billing period, invoice/document identity, parser contract,
+  local path, byte count, checksum, and single-invoice selection scope. They
+  must not contain API URLs, endpoints, authorization headers, bearer tokens,
+  passwords, or provider secrets.
 - Outlook credentials remain in the native Outlook connection.
 - Never persist tokens, tickets, signed URLs, SAS links, passwords, provider
   keys, raw database parameters, or transient SharePoint links.
@@ -92,7 +97,9 @@ SharePoint:
 Invoices:
 
 1. Approved provider API where implemented and enabled.
-2. Manual SharePoint upload otherwise.
+2. Manual SharePoint upload otherwise. AAPT remains manual until its endpoint,
+   authentication, exact invoice selector, expected ZIP output, and test
+   download are proven.
 3. A separately approved portal process may place a package in upload space,
    after which the run still uses `manual_upload`.
 

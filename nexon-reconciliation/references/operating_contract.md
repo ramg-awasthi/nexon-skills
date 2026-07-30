@@ -38,6 +38,12 @@ reconciliation, the staged source, and its SHA-256. The encrypted preparation,
 ephemeral private key, and decrypted ticket are transient and must not become
 run artifacts.
 
+Provider API intake durably retains only the staged source file and sanitized
+provider provenance manifest. The manifest must bind one exact provider account,
+billing period, invoice identity, parser contract, byte count, checksum, and
+single-invoice selection scope. Provider API credentials, tokens, URLs,
+endpoints, and authorization headers remain outside run artifacts.
+
 Every run contains its run, audit, parser, unpack, warning, normalized-line,
 runtime-identity, and frozen-settings artifacts. Reconciliation also records
 the billing-candidate contract identity, sanitized query receipt, matching
