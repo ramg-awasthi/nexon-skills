@@ -61,6 +61,11 @@ data-quality evidence and cannot be hidden. A missing required member, unknown
 layout, ambiguous route, or invalid financial value fails closed with a stable
 code.
 
+Default parser grain is one charge-bearing source row to one normalized output
+line. Aggregation is allowed only when the runtime declares a provider/version
+rule backed by production evidence; otherwise it is a parser flaw, not a
+shortcut.
+
 Provider-specific evidence and known format boundaries are documented in
 `references/providers/`. Those references explain formats; they do not replace
 the executable adapter or authorize speculative behavior.

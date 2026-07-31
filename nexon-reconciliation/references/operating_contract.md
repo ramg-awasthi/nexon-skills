@@ -20,15 +20,16 @@ Stage order:
 2. run creation from the authoritative claimed run ID when a claim exists
 3. archive validation
 4. provider parsing and source accounting
-5. billing-candidate request/response handoff
-6. deterministic comparison
-7. core persistence or audited report-only skip
-8. raw workbook
-9. exception investigation when unresolved rows exist
-10. refined workbook
-11. publication and re-download verification
-12. validation
-13. notification when enabled
+5. parsed-output publication and re-download verification
+6. billing-candidate request/response handoff
+7. deterministic comparison
+8. core persistence or audited report-only skip
+9. raw workbook
+10. exception investigation when unresolved rows exist
+11. refined workbook
+12. final publication and re-download verification
+13. validation
+14. notification when enabled
 
 ## Durable And Transient Artifacts
 
@@ -45,10 +46,25 @@ single-invoice selection scope. Provider API credentials, tokens, URLs,
 endpoints, and authorization headers remain outside run artifacts.
 
 Every run contains its run, audit, parser, unpack, warning, normalized-line,
-runtime-identity, and frozen-settings artifacts. Reconciliation also records
-the billing-candidate contract identity, sanitized query receipt, matching
-evidence, reports, investigation evidence when applicable, and publication
-verification.
+runtime-identity, and frozen-settings artifacts. Reconciliation also exposes a
+SharePoint-facing parsed phase under `Invoice/` and `ParsedOutput/`, then later
+records the billing-candidate contract identity, sanitized query receipt,
+matching evidence, `ReconciledOutput/` reports, investigation evidence when
+applicable, and publication verification.
+
+## Parsed Publication Pause
+
+`awaiting_parsed_publication` means provider parsing is complete and the
+runtime has frozen a small parsed artifact set before DB matching begins. The
+set contains the original invoice package under `Invoice/`, plus
+`ParsedOutput/raw_parsed_invoice.csv` and
+`ParsedOutput/parser_manifest.json`.
+
+The supervisor uploads only that frozen set to the exact result run folder,
+re-downloads every item through SharePoint MCP, and resumes with
+`--parsed-publication-receipt` plus one
+`--parsed-publication-verification-receipt` per uploaded item. Billing
+candidate preparation must not begin until this parsed publication is verified.
 
 ## Billing-Candidate Pause
 
@@ -117,8 +133,9 @@ the core candidate operation or invent invoice rows.
 ## Publication Pause
 
 `awaiting_publication` freezes local paths, result-relative paths, and
-checksums. Native SharePoint uploads the exact result set and moves the manual
-source only after successful publication upload. The native receipt is
+checksums for final evidence and `ReconciledOutput/`. Native SharePoint uploads
+the exact final result set and performs any runtime-requested manual source
+move after successful final publication upload. The native receipt is
 sanitized. Every published artifact and moved source is then re-indexed,
 prepared, downloaded, and compared by relative path and SHA-256 before
 completion.
