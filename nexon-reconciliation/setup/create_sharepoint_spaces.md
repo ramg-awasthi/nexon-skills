@@ -32,15 +32,16 @@ not a routine agent capability.
 
 ## Permissions
 
-SharePoint Intake MCP receives read-only access to the exact site and may list
-approved roots and read binary content. It must not create, update, move,
-delete, share, or manage permissions.
+SharePoint Intake MCP receives scoped access to the exact site. It may list
+approved roots, read binary source/reference content, create the exact result
+run folders needed for frozen artifacts, upload result artifacts, and verify
+uploaded bytes. It must not move sources, delete, share, or manage permissions.
 
 The native SharePoint connection may:
 
 - list the approved site and folders;
-- move the exact staged operational source into its result run folder;
-- upload the frozen result artifacts.
+- move the exact staged operational source only when the runtime emits a
+  source-move request.
 
 It must not make routine permission changes, create share links, or delete
 unrelated content.
@@ -53,8 +54,10 @@ Bind the environment-appropriate SharePoint Intake MCP connection exposing:
 recon_sp_get_capabilities
 recon_sp_probe
 recon_sp_index_sources
+recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
+recon_sp_upload_result_artifacts
 ```
 
 The MCP service owns the SharePoint application credential, site/drive
@@ -83,10 +86,12 @@ nexon-recon preflight \
    ZIP/PDF/XLSX binary integrity without moving or modifying the fixture.
 5. Confirm the private key and preparation are disposed before ticket
    redemption.
-6. Upload and move harmless setup artifacts with native SharePoint.
+6. Upload harmless result artifacts with `recon_sp_upload_result_artifacts`.
 7. Re-index and re-download the result artifacts through MCP to verify the
-   publication path.
+   result upload path. Test native SharePoint source move only as a separate
+   setup/admin validation, not as the result artifact upload path.
 
-Normal runs validate that the folders already exist and fail closed when an
-operational upload or result folder is missing. They never create or repair the
-SharePoint structure.
+Normal runs validate that source and reference folders already exist and fail
+closed when an operational source folder is missing. The upload tool may create
+the exact result run folder path for frozen artifacts; it does not repair the
+broader SharePoint structure.
