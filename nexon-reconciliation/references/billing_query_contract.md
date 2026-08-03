@@ -17,9 +17,11 @@ fingerprint.
 
 ## Frozen Plain Request
 
-After deterministic parsing and billing-period resolution, `nexon-recon run`
-emits one `billing_candidate_plan.json` and pauses as
-`awaiting_billing_candidates`. The plan exposes:
+After deterministic parsing, the runtime first pauses for parsed SharePoint
+publication. Only after `awaiting_parsed_publication` is uploaded, verified,
+and resumed does the runtime resolve the billing period, emit one
+`billing_candidate_plan.json`, and pause as `awaiting_billing_candidates`. The
+plan exposes:
 
 - `request_identity`: non-secret environment, run ID, and mapping version for
   sanity checks;

@@ -17,7 +17,8 @@ to `nexon-recon-exception-investigator`.
   runtime symlinks.
 - Never infer invoice rows or author core billing SQL.
 - Use SharePoint Intake MCP for source index and binary preparation; use native
-  SharePoint only for result uploads and the proven source move.
+  SharePoint only for parsed-output/result uploads and the runtime-requested
+  source move.
 - Use `recon_db_get_billing_candidates` once with the runtime's frozen plain
   `request` object from the `billing_candidate_plan`. Use `recon_db_read_query`
   only for bounded exception evidence.
@@ -56,20 +57,28 @@ to `nexon-recon-exception-investigator`.
    reconciliation never uses `--copy` or `--local-only`, must include the source
    claim request/receipt for manual-upload intake, and must include provider
    provenance arguments for provider API intake.
-7. On `awaiting_billing_candidates`, call
+7. On `awaiting_parsed_publication`, upload only the frozen parsed artifact
+   set to the dev/prod result run folder, verify each uploaded item through
+   SharePoint MCP download receipts, and resume with
+   `--parsed-publication-receipt` plus one
+   `--parsed-publication-verification-receipt` per item. The parsed set exposes
+   `Invoice/` and `ParsedOutput/` so parser progress is visible before DB
+   matching.
+8. On `awaiting_billing_candidates`, call
    `recon_db_get_billing_candidates` exactly once with the plain `request`
    object copied unchanged from the `billing_candidate_plan`, save the complete
    unchanged MCP response returned by the tool, and use
    `nexon-recon resume
    --billing-candidate-response ...`.
-8. Allow auto-match only for a verified deterministic rule with service,
+9. Allow auto-match only for a verified deterministic rule with service,
    provider, and period evidence. Route zero, multiple, provisional, and
    billing-only cases to the exception workflow.
-9. If core persistence is disabled, record `skip` and continue. Accepted
+10. If core persistence is disabled, record `skip` and continue. Accepted
    resolutions remain disabled.
-10. Publish the frozen artifact set, move the manual source into run `source/`,
-   re-download every published item for checksum verification, and resume.
-11. Validate the completed state and return sanitized counts and locations.
+11. Publish the frozen final artifact set, perform any runtime-requested manual
+   source move, re-download every published item for checksum verification, and
+   resume.
+12. Validate the completed state and return sanitized counts and locations.
 
 ## Billing Periods
 
@@ -81,7 +90,11 @@ invoice windows for candidate retrieval and matching.
 
 Report raw rows, charge-input rows, reference/header rows, aggregation input and
 output rows, suppressed rows, normalized output rows, and financial totals.
-An aggregation may reduce row count but may never disappear from accounting.
+Do not group multiple charged source rows into fewer normalized rows unless the
+runtime declares a provider/version rule with explicit proof. AAPT raw usage
+rows remain visible in parsed accounting; refined/reconciled output may apply a
+proven provider rule. AAPT invoice `21919695` proves `rec010` internet usage
+collapsed from 181 source rows to one persisted/result row.
 
 ## Failure Rules
 
