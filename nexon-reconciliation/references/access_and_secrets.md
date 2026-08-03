@@ -20,16 +20,19 @@ recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
 recon_sp_prepare_result_uploads
+recon_sp_move_source
+recon_sp_copy_source
 ```
 
 The service resolves tenant, site, drive, item, endpoint, and attestation
 identity internally. These values and Graph credentials do not enter prompts,
 skills, agent memory, reports, or durable manifests.
 
-Native SharePoint is independently authorized only for exact source moves after
-verified publication upload and setup-time folder validation. Do not use native
-text reads or native uploads for binary/result artifacts, create share links,
-change permissions, or delete unrelated items.
+Runtime-requested source movement is owned by SharePoint Intake MCP after
+verified publication upload. Native SharePoint is independently authorized only
+for setup-time folder validation. Do not use native text reads, native uploads,
+native moves, create share links, change permissions, or delete unrelated
+items.
 
 ## One-Time SharePoint Transfer
 
@@ -103,8 +106,8 @@ policy and audit.
 SharePoint:
 
 1. SharePoint Intake MCP for capability, probe, index, preparation, result
-   result upload, and binary verification.
-2. Native SharePoint for controlled source move and setup validation only.
+   upload, binary verification, and runtime-requested source movement.
+2. Native SharePoint for setup validation only.
 3. No direct Graph, browser, or loose-script fallback in the runtime path.
 
 Invoices:

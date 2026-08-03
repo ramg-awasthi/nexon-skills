@@ -142,10 +142,10 @@ checksums for final evidence and `ReconciledOutput/`.
 `recon_sp_prepare_result_uploads` returns scoped upload sessions for the exact
 final result set. `nexon-recon upload-result-artifacts` streams the files to the
 MCP artifact URLs and writes the sanitized receipt accepted by the runtime.
-Native SharePoint is reserved for the runtime-requested source move until a
-dedicated MCP move tool exists. Every uploaded artifact and moved source is then
-re-indexed, prepared, downloaded, and compared by relative path and SHA-256
-before completion.
+After uploaded artifacts are re-indexed, prepared, downloaded, and compared by
+relative path and SHA-256, manual-upload runs emit a source-move request. The
+supervisor sends that unchanged request to `recon_sp_move_source`, saves the
+server-verified move receipt, and resumes with `--source-move-receipt`.
 
 ## Status And Matching Rules
 

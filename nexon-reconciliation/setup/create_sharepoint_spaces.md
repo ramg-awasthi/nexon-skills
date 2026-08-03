@@ -34,17 +34,13 @@ not a routine agent capability.
 
 SharePoint Intake MCP receives scoped access to the exact site. It may list
 approved roots, read binary source/reference content, create the exact result
-run folders needed for frozen artifacts, upload result artifacts, and verify
-uploaded bytes. It must not move sources, delete, share, or manage permissions.
+run folders needed for frozen artifacts, upload result artifacts, verify
+uploaded bytes, and perform runtime-requested source move/copy into the result
+root. It must not delete, share, or manage permissions.
 
-The native SharePoint connection may:
-
-- list the approved site and folders;
-- move the exact staged operational source only when the runtime emits a
-  source-move request.
-
-It must not make routine permission changes, create share links, or delete
-unrelated content.
+The native SharePoint connection may list the approved site and folders for
+setup validation only. It must not perform runtime source moves, routine
+permission changes, create share links, or delete unrelated content.
 
 ## Runtime Binding
 
@@ -58,6 +54,8 @@ recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
 recon_sp_prepare_result_uploads
+recon_sp_move_source
+recon_sp_copy_source
 ```
 
 The MCP service owns the SharePoint application credential, site/drive
@@ -90,8 +88,8 @@ nexon-recon preflight \
    `recon_sp_prepare_result_uploads`, then stream the files with
    `nexon-recon upload-result-artifacts`.
 7. Re-index and re-download the result artifacts through MCP to verify the
-   result upload path. Test native SharePoint source move only as a separate
-   setup/admin validation, not as the result artifact upload path.
+   result upload path. Use `recon_sp_move_source` only for a runtime-emitted
+   source-move request; do not use native SharePoint moves in the runtime path.
 
 Normal runs validate that source and reference folders already exist and fail
 closed when an operational source folder is missing. The upload tool may create
