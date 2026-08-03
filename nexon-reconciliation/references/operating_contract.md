@@ -60,9 +60,13 @@ set contains the original invoice package under `Invoice/`, plus
 `ParsedOutput/raw_parsed_invoice.csv` and
 `ParsedOutput/parser_manifest.json`.
 
-The supervisor uploads only that frozen set to the exact result run folder,
-re-downloads every item through SharePoint MCP, and resumes with
-`--parsed-publication-receipt` plus one
+The supervisor uploads only that frozen set through
+`recon_sp_upload_result_artifacts`. Each local artifact is read as bytes,
+base64-encoded unchanged as `content_base64`, and sent with the frozen
+`local_path`, `relative_path`, and `sha256`. The supervisor saves
+`structuredContent.result` as the parsed publication receipt, re-indexes the
+result run folder, re-downloads every item through SharePoint MCP, and resumes
+with `--parsed-publication-receipt` plus one
 `--parsed-publication-verification-receipt` per uploaded item. Billing
 candidate preparation must not begin until this parsed publication is verified.
 
@@ -132,12 +136,13 @@ the core candidate operation or invent invoice rows.
 ## Publication Pause
 
 `awaiting_publication` freezes local paths, result-relative paths, and
-checksums for final evidence and `ReconciledOutput/`. Native SharePoint uploads
-the exact final result set and performs any runtime-requested manual source
-move after successful final publication upload. The native receipt is
-sanitized. Every published artifact and moved source is then re-indexed,
-prepared, downloaded, and compared by relative path and SHA-256 before
-completion.
+checksums for final evidence and `ReconciledOutput/`.
+`recon_sp_upload_result_artifacts` uploads the exact final result set to the result
+run folder and returns the sanitized receipt accepted by the runtime. Native
+SharePoint is reserved for the runtime-requested source move until a dedicated
+MCP move tool exists. Every uploaded artifact and moved source is then
+re-indexed, prepared, downloaded, and compared by relative path and SHA-256
+before completion.
 
 ## Status And Matching Rules
 

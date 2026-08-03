@@ -15,10 +15,12 @@ packages at run time.
 
 ## SharePoint
 
-SharePoint Intake MCP owns approved source indexing, one-time preparation, and
-attested binary transfer. Native SharePoint owns controlled source moves and
-result uploads. Result publication is verified by reusing the MCP
-index/prepare/fetch path against the exact frozen result set.
+SharePoint Intake MCP owns approved source indexing, one-time preparation,
+attested binary transfer, result artifact upload, and result verification.
+Native SharePoint is reserved for setup validation and controlled source moves
+until a dedicated MCP move tool exists. Result upload is performed by
+`recon_sp_upload_result_artifacts` and verified by reusing the MCP index/prepare/fetch
+path against the exact frozen result set.
 
 Tenant, site, drive, item, application credential, ticket, and attestation
 private-key identities remain inside the relevant service boundary. The
