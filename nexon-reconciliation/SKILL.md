@@ -17,9 +17,8 @@ to `nexon-recon-exception-investigator`.
   runtime symlinks.
 - Never infer invoice rows or author core billing SQL.
 - Use SharePoint Intake MCP for source index, binary preparation, result
-  artifact upload, and result verification. Use native SharePoint only for
-  setup validation and the runtime-requested source move until a dedicated MCP
-  move tool exists.
+  artifact upload, result verification, and runtime-requested source movement.
+  Use native SharePoint only for setup validation.
 - Use `recon_db_get_billing_candidates` once with the runtime's frozen plain
   `request` object from the `billing_candidate_plan`. Use `recon_db_read_query`
   only for bounded exception evidence.
@@ -90,8 +89,9 @@ to `nexon-recon-exception-investigator`.
    `nexon-recon upload-result-artifacts` with the returned upload session and
    frozen `publication_set.json`, save the small final
    publication receipt, re-index the result run folder, re-download every
-   uploaded item for checksum verification, perform only the runtime-requested
-   source move, and resume.
+   uploaded item for checksum verification, call `recon_sp_move_source` only
+   when the runtime emits a source-move request, save the returned source-move
+   receipt, and resume.
 12. Validate the completed state and return sanitized counts and locations.
 
 ## Billing Periods
