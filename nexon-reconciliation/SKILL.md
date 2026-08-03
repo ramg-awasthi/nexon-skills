@@ -16,9 +16,10 @@ to `nexon-recon-exception-investigator`.
   scripts, run skill files, pass a config path, install packages, or create
   runtime symlinks.
 - Never infer invoice rows or author core billing SQL.
-- Use SharePoint Intake MCP for source index and binary preparation; use native
-  SharePoint only for parsed-output/result uploads and the runtime-requested
-  source move.
+- Use SharePoint Intake MCP for source index, binary preparation, result
+  artifact upload, and result verification. Use native SharePoint only for
+  setup validation and the runtime-requested source move until a dedicated MCP
+  move tool exists.
 - Use `recon_db_get_billing_candidates` once with the runtime's frozen plain
   `request` object from the `billing_candidate_plan`. Use `recon_db_read_query`
   only for bounded exception evidence.
@@ -60,12 +61,17 @@ to `nexon-recon-exception-investigator`.
    run-start request/receipt for manual-upload intake, and must include provider
    provenance arguments for provider API intake.
 7. On `awaiting_parsed_publication`, upload only the frozen parsed artifact
-   set to the dev/prod result run folder, verify each uploaded item through
-   SharePoint MCP download receipts, and resume with
-   `--parsed-publication-receipt` plus one
-   `--parsed-publication-verification-receipt` per item. The parsed set exposes
-   `Invoice/` and `ParsedOutput/` so parser progress is visible before DB
-   matching.
+   set with `recon_sp_upload_result_artifacts`. Read each local artifact as bytes,
+   base64-encode those unchanged bytes into `content_base64`, and pass
+   `provider`, `year`, `month`, `run_id`, `local_path`, `relative_path`, and
+   `sha256` unchanged from the runtime artifact set. Save
+   `structuredContent.result` as the parsed publication receipt, re-index the
+   result run folder, verify each item through SharePoint MCP download
+   receipts, and resume with `--parsed-publication-receipt` plus one
+   `--parsed-publication-verification-receipt` per item. Do not use native
+   SharePoint upload, text reads, truncated content, or manually rebuilt files.
+   The parsed set exposes `Invoice/` and `ParsedOutput/` so parser progress is
+   visible before DB matching.
 8. On `awaiting_billing_candidates`, call
    `recon_db_get_billing_candidates` exactly once with the plain `request`
    object copied unchanged from the `billing_candidate_plan`, save the complete
@@ -77,9 +83,10 @@ to `nexon-recon-exception-investigator`.
    billing-only cases to the exception workflow.
 10. If core persistence is disabled, record `skip` and continue. Accepted
    resolutions remain disabled.
-11. Publish the frozen final artifact set, perform any runtime-requested manual
-   source move, re-download every published item for checksum verification, and
-   resume.
+11. Upload the frozen final artifact set with `recon_sp_upload_result_artifacts`,
+   save `structuredContent.result` as the final publication receipt, re-index
+   the result run folder, re-download every uploaded item for checksum
+   verification, perform only the runtime-requested source move, and resume.
 12. Validate the completed state and return sanitized counts and locations.
 
 ## Billing Periods

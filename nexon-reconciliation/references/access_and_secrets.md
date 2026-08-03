@@ -9,25 +9,27 @@ Do not install dependencies or substitute loose scripts during a run.
 
 ## SharePoint Boundaries
 
-SharePoint Intake MCP holds its read-only SharePoint application credential and
+SharePoint Intake MCP holds its scoped SharePoint application credential and
 exposes only:
 
 ```text
 recon_sp_get_capabilities
 recon_sp_probe
 recon_sp_index_sources
+recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
+recon_sp_upload_result_artifacts
 ```
 
 The service resolves tenant, site, drive, item, endpoint, and attestation
 identity internally. These values and Graph credentials do not enter prompts,
 skills, agent memory, reports, or durable manifests.
 
-Native SharePoint is independently authorized for exact source moves after
-verified publication upload, result uploads, and setup-time folder validation.
-Do not use native text reads for binary files, create share links, change
-permissions, or delete unrelated items.
+Native SharePoint is independently authorized only for exact source moves after
+verified publication upload and setup-time folder validation. Do not use native
+text reads or native uploads for binary/result artifacts, create share links,
+change permissions, or delete unrelated items.
 
 ## One-Time SharePoint Transfer
 
@@ -45,6 +47,16 @@ The runtime sends the decrypted ticket only in the required request header,
 refuses redirects, and verifies the signed response attestation. Never put the
 ticket, private key, endpoint, or authorization material in a URL, query, CLI
 argument, output, exception, audit record, or durable receipt.
+
+## SharePoint Publication Transfer
+
+Result upload uses `recon_sp_upload_result_artifacts`. The agent sends only the
+runtime-frozen artifact metadata plus `content_base64`, which is a transport
+encoding of the unchanged local file bytes. Do not display, summarize,
+truncate, edit, or rebuild artifact content before sending it. The MCP decodes
+the bytes, validates the SHA-256, uploads raw bytes to the result space, and
+server-side re-downloads the item to verify the checksum before returning the
+receipt used by `nexon-recon resume`.
 
 ## Database Boundaries
 
@@ -89,9 +101,9 @@ policy and audit.
 
 SharePoint:
 
-1. SharePoint Intake MCP for capability, probe, index, preparation, and
-   read-only binary verification.
-2. Native SharePoint for controlled move and upload.
+1. SharePoint Intake MCP for capability, probe, index, preparation, result
+   result upload, and binary verification.
+2. Native SharePoint for controlled source move and setup validation only.
 3. No direct Graph, browser, or loose-script fallback in the runtime path.
 
 Invoices:
