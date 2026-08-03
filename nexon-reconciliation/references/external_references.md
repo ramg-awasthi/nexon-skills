@@ -18,9 +18,10 @@ packages at run time.
 SharePoint Intake MCP owns approved source indexing, one-time preparation,
 attested binary transfer, result artifact upload, and result verification.
 Native SharePoint is reserved for setup validation and controlled source moves
-until a dedicated MCP move tool exists. Result upload is performed by
-`recon_sp_upload_result_artifacts` and verified by reusing the MCP index/prepare/fetch
-path against the exact frozen result set.
+until a dedicated MCP move tool exists. Result upload starts with
+`recon_sp_prepare_result_uploads`, streams bytes through
+`nexon-recon upload-result-artifacts`, and is verified by reusing the MCP
+index/prepare/fetch path against the exact frozen result set.
 
 Tenant, site, drive, item, application credential, ticket, and attestation
 private-key identities remain inside the relevant service boundary. The

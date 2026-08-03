@@ -57,7 +57,7 @@ recon_sp_index_sources
 recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
-recon_sp_upload_result_artifacts
+recon_sp_prepare_result_uploads
 ```
 
 The MCP service owns the SharePoint application credential, site/drive
@@ -86,7 +86,9 @@ nexon-recon preflight \
    ZIP/PDF/XLSX binary integrity without moving or modifying the fixture.
 5. Confirm the private key and preparation are disposed before ticket
    redemption.
-6. Upload harmless result artifacts with `recon_sp_upload_result_artifacts`.
+6. Start harmless result artifact upload sessions with
+   `recon_sp_prepare_result_uploads`, then stream the files with
+   `nexon-recon upload-result-artifacts`.
 7. Re-index and re-download the result artifacts through MCP to verify the
    result upload path. Test native SharePoint source move only as a separate
    setup/admin validation, not as the result artifact upload path.

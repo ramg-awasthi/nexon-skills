@@ -19,7 +19,7 @@ recon_sp_index_sources
 recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
-recon_sp_upload_result_artifacts
+recon_sp_prepare_result_uploads
 ```
 
 The service resolves tenant, site, drive, item, endpoint, and attestation
@@ -50,13 +50,14 @@ argument, output, exception, audit record, or durable receipt.
 
 ## SharePoint Publication Transfer
 
-Result upload uses `recon_sp_upload_result_artifacts`. The agent sends only the
-runtime-frozen artifact metadata plus `content_base64`, which is a transport
-encoding of the unchanged local file bytes. Do not display, summarize,
-truncate, edit, or rebuild artifact content before sending it. The MCP decodes
-the bytes, validates the SHA-256, uploads raw bytes to the result space, and
-server-side re-downloads the item to verify the checksum before returning the
-receipt used by `nexon-recon resume`.
+Result upload starts with `recon_sp_prepare_result_uploads`. The agent sends
+only the runtime-frozen artifact metadata: `local_path`, `relative_path`,
+`sha256`, and `size_bytes`. The MCP returns a short-lived upload session under
+`/mcp/artifact/...`; the runtime command `nexon-recon upload-result-artifacts`
+streams the local file bytes and writes the small publication receipt used by
+`nexon-recon resume`. Do not display, summarize, truncate, edit, rebuild, or
+transform artifact content into text payloads in the agent. Do not print upload tokens,
+artifact URLs, or full upload-session receipts.
 
 ## Database Boundaries
 

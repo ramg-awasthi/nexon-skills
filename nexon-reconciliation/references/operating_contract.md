@@ -60,13 +60,15 @@ set contains the original invoice package under `Invoice/`, plus
 `ParsedOutput/raw_parsed_invoice.csv` and
 `ParsedOutput/parser_manifest.json`.
 
-The supervisor uploads only that frozen set through
-`recon_sp_upload_result_artifacts`. Each local artifact is read as bytes,
-base64-encoded unchanged as `content_base64`, and sent with the frozen
-`local_path`, `relative_path`, and `sha256`. The supervisor saves
-`structuredContent.result` as the parsed publication receipt, re-indexes the
-result run folder, re-downloads every item through SharePoint MCP, and resumes
-with `--parsed-publication-receipt` plus one
+The supervisor prepares upload sessions only for that frozen set through
+`recon_sp_prepare_result_uploads`. Only frozen metadata is sent:
+`local_path`, `relative_path`, `sha256`, and `size_bytes`. The supervisor saves
+`structuredContent.result` as the parsed upload-session receipt and runs
+`nexon-recon upload-result-artifacts` with that receipt and the frozen
+`parsed_publication_set.json`. The runtime streams bytes through
+`/mcp/artifact/...` and writes the small parsed publication receipt. The
+supervisor then re-indexes the result run folder, re-downloads every item
+through SharePoint MCP, and resumes with `--parsed-publication-receipt` plus one
 `--parsed-publication-verification-receipt` per uploaded item. Billing
 candidate preparation must not begin until this parsed publication is verified.
 
@@ -137,10 +139,11 @@ the core candidate operation or invent invoice rows.
 
 `awaiting_publication` freezes local paths, result-relative paths, and
 checksums for final evidence and `ReconciledOutput/`.
-`recon_sp_upload_result_artifacts` uploads the exact final result set to the result
-run folder and returns the sanitized receipt accepted by the runtime. Native
-SharePoint is reserved for the runtime-requested source move until a dedicated
-MCP move tool exists. Every uploaded artifact and moved source is then
+`recon_sp_prepare_result_uploads` returns scoped upload sessions for the exact
+final result set. `nexon-recon upload-result-artifacts` streams the files to the
+MCP artifact URLs and writes the sanitized receipt accepted by the runtime.
+Native SharePoint is reserved for the runtime-requested source move until a
+dedicated MCP move tool exists. Every uploaded artifact and moved source is then
 re-indexed, prepared, downloaded, and compared by relative path and SHA-256
 before completion.
 
