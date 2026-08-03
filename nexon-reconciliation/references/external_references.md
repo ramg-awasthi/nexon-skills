@@ -29,12 +29,12 @@ runtime retains only sanitized receipts and content hashes.
 Nexon Recon Database MCP owns the versioned core billing candidate operation:
 
 ```text
-recon_db_claim_source
-recon_db_transition_run
+recon_db_start_run
+recon_db_update_run
 recon_db_get_billing_candidates
 ```
 
-The runtime prepares source-claim and transition requests; the supervisor sends
+The runtime prepares run-start and progress-update requests; the supervisor sends
 them unchanged and preserves receipts. For billing candidates, the runtime
 submits one frozen plain `request` object and resumes with the unchanged MCP
 response through `--billing-candidate-response`. Provider mappings and core SQL

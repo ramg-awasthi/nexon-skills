@@ -22,9 +22,11 @@ to `nexon-recon-exception-investigator`.
 - Use `recon_db_get_billing_candidates` once with the runtime's frozen plain
   `request` object from the `billing_candidate_plan`. Use `recon_db_read_query`
   only for bounded exception evidence.
-- For manual-upload reconciliation, use `recon_db_claim_source` before the
+- For manual-upload reconciliation, use `recon_db_start_run` before the
   local run is created. Call lifecycle tools only from runtime-emitted requests;
-  never invent source claims or transitions.
+  never invent run-start or progress-update requests.
+- Use `recon_db_reset_stuck_run` only when the user explicitly asks to reset a
+  stuck run; it is not part of the normal E2E flow.
 - For provider API reconciliation, use only Invoice Intake MCP tools that stage
   one exact invoice package and emit a sanitized provenance manifest. Never ask
   it to download all invoices, choose latest, sweep date ranges, or fetch a
@@ -50,12 +52,12 @@ to `nexon-recon-exception-investigator`.
    `recon_invoice_download`, request its scoped fetch receipt with
    `recon_invoice_fetch`, and keep the sanitized provenance manifest.
 5. For manual-upload reconciliation, run `nexon-recon identity`, prepare the
-   source claim with `nexon-recon lifecycle-mcp prepare-source-claim`, call
-   `recon_db_claim_source` exactly once with the unchanged request, and save
+   run start with `nexon-recon lifecycle-mcp prepare-run-start`, call
+   `recon_db_start_run` exactly once with the unchanged request, and save
    the unchanged receipt.
 6. Start with `nexon-recon run`. Parser validation uses `--copy`; Fleet
    reconciliation never uses `--copy` or `--local-only`, must include the source
-   claim request/receipt for manual-upload intake, and must include provider
+   run-start request/receipt for manual-upload intake, and must include provider
    provenance arguments for provider API intake.
 7. On `awaiting_parsed_publication`, upload only the frozen parsed artifact
    set to the dev/prod result run folder, verify each uploaded item through

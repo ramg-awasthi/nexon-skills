@@ -16,8 +16,8 @@ validation; `failed` is terminal.
 
 Stage order:
 
-1. source staging and source claim for manual-upload reconciliation
-2. run creation from the authoritative claimed run ID when a claim exists
+1. source staging and DB run start for manual-upload reconciliation
+2. run creation from the authoritative started run ID when a DB run start exists
 3. archive validation
 4. provider parsing and source accounting
 5. parsed-output publication and re-download verification
@@ -34,7 +34,7 @@ Stage order:
 ## Durable And Transient Artifacts
 
 Manual SharePoint intake durably retains unchanged capability/probe envelopes,
-a sanitized download receipt, the source-claim request/receipt for
+a sanitized download receipt, the run-start request/receipt for
 reconciliation, the staged source, and its SHA-256. The encrypted preparation,
 ephemeral private key, and decrypted ticket are transient and must not become
 run artifacts.
@@ -89,18 +89,17 @@ candidate preparation must not begin until this parsed publication is verified.
 The agent never writes core billing SQL. Provider identifier precedence and
 physical schema mappings live in versioned, tested Database MCP code/config.
 
-## Source Claim
+## Run Start
 
-Manual-upload reconciliation must claim the source through
-`recon_db_claim_source` before local run creation. The claim is prepared only
-by `nexon-recon lifecycle-mcp prepare-source-claim` from the attested download
-receipt, runtime identity, Database MCP capabilities, and SharePoint MCP
-capabilities. The supervisor sends the unchanged request object to the MCP,
-saves the unchanged receipt, and starts `nexon-recon run` with both files.
+Manual-upload reconciliation must start the DB run through
+`recon_db_start_run` before local run creation. The request is prepared only by
+`nexon-recon lifecycle-mcp prepare-run-start` from the attested download
+receipt. The supervisor sends the unchanged request object to the MCP, saves the
+unchanged receipt, and starts `nexon-recon run` with both files.
 
-The local run ID comes from the authoritative claim receipt. If the claim
+The local run ID comes from the authoritative run-start receipt. If the response
 response does not match environment, provider, source identity, run purpose,
-source move mode, or active owned lease, the run stops before parsing.
+source move mode, or `can_run=true`, the run stops before parsing.
 
 ## Report-Only Persistence
 
@@ -144,7 +143,7 @@ completion.
 
 The raw workbook preserves all current reconciliation fields and status values.
 The refined workbook preserves every raw field and adds the approved agent and
-human-review fields. A parser-only test cannot claim billing comparison,
+human-review fields. A parser-only test cannot report billing comparison,
 matching, reconciliation workbooks, or publication completion.
 
 Auto-match requires a verified mapping rule and deterministic provider,
