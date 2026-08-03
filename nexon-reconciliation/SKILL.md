@@ -60,16 +60,18 @@ to `nexon-recon-exception-investigator`.
    reconciliation never uses `--copy` or `--local-only`, must include the source
    run-start request/receipt for manual-upload intake, and must include provider
    provenance arguments for provider API intake.
-7. On `awaiting_parsed_publication`, upload only the frozen parsed artifact
-   set with `recon_sp_upload_result_artifacts`. Read each local artifact as bytes,
-   base64-encode those unchanged bytes into `content_base64`, and pass
-   `provider`, `year`, `month`, `run_id`, `local_path`, `relative_path`, and
-   `sha256` unchanged from the runtime artifact set. Save
-   `structuredContent.result` as the parsed publication receipt, re-index the
-   result run folder, verify each item through SharePoint MCP download
-   receipts, and resume with `--parsed-publication-receipt` plus one
+7. On `awaiting_parsed_publication`, prepare upload sessions only for the
+   frozen parsed artifact set with `recon_sp_prepare_result_uploads`. Pass only frozen metadata:
+   `provider`, `year`, `month`, `run_id`, `local_path`, `relative_path`,
+   `sha256`, and `size_bytes`. Save `structuredContent.result` as the parsed
+   upload-session receipt, then run `nexon-recon upload-result-artifacts` with
+   that receipt and the frozen `parsed_publication_set.json` to stream bytes
+   through `/mcp/artifact/...` and write the small parsed publication receipt.
+   Re-index the result run folder, verify each item through SharePoint MCP
+   download receipts, and resume with `--parsed-publication-receipt` plus one
    `--parsed-publication-verification-receipt` per item. Do not use native
-   SharePoint upload, text reads, truncated content, or manually rebuilt files.
+   SharePoint upload, text reads, agent-side file-byte/base64 payloads,
+   truncated content, or manually rebuilt files.
    The parsed set exposes `Invoice/` and `ParsedOutput/` so parser progress is
    visible before DB matching.
 8. On `awaiting_billing_candidates`, call
@@ -83,10 +85,13 @@ to `nexon-recon-exception-investigator`.
    billing-only cases to the exception workflow.
 10. If core persistence is disabled, record `skip` and continue. Accepted
    resolutions remain disabled.
-11. Upload the frozen final artifact set with `recon_sp_upload_result_artifacts`,
-   save `structuredContent.result` as the final publication receipt, re-index
-   the result run folder, re-download every uploaded item for checksum
-   verification, perform only the runtime-requested source move, and resume.
+11. Prepare upload sessions for the frozen final artifact set with
+   `recon_sp_prepare_result_uploads` metadata only, run
+   `nexon-recon upload-result-artifacts` with the returned upload session and
+   frozen `publication_set.json`, save the small final
+   publication receipt, re-index the result run folder, re-download every
+   uploaded item for checksum verification, perform only the runtime-requested
+   source move, and resume.
 12. Validate the completed state and return sanitized counts and locations.
 
 ## Billing Periods
