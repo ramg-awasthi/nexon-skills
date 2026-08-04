@@ -75,11 +75,14 @@ to `nexon-recon-exception-investigator`.
    `--parsed-publication-receipt`. If the runtime returns
    `awaiting_source_move`, call `recon_sp_move_source` with the unchanged
    runtime request so the original upload is moved into the result run folder
-   under `Invoice/`, then resume with `--source-move-receipt`. Do not re-index
-   or re-download parsed artifacts for SHA checks; the SharePoint MCP upload
-   receipt is the server-side verification. Do not use native SharePoint
-   upload/move, text reads, agent-side file-byte/base64 payloads, truncated
-   content, or manually rebuilt files.
+   under `Invoice/`. Write only the MCP response `structuredContent.data`
+   object as the source-move receipt; do not write the full MCP envelope with
+   top-level `schema_version`, `operation`, `status`, `data`, or `error`.
+   Then resume with `--source-move-receipt`. Do not re-index or re-download
+   parsed artifacts for SHA checks; the SharePoint MCP upload receipt is the
+   server-side verification. Do not use native SharePoint upload/move, text
+   reads, agent-side file-byte/base64 payloads, truncated content, or manually
+   rebuilt files.
    The parsed upload set exposes `ParsedOutput/`; the original invoice becomes
    visible under `Invoice/` by move, not by duplicate upload. After this point,
    the upload folder is free for new intake. If DB, matching, investigation, or

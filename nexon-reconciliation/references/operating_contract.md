@@ -72,12 +72,15 @@ supervisor must not re-index or re-download parsed artifacts for SHA checks.
 The supervisor resumes with `--parsed-publication-receipt`. For manual-upload
 runs, the runtime then emits `awaiting_source_move`; the supervisor calls
 `recon_sp_move_source` with the unchanged runtime request so the original upload
-is moved into the result run folder under `Invoice/`, saves the move receipt,
-and resumes with `--source-move-receipt`. Billing candidate preparation must
-not begin until parsed publication and the source move are complete. After the
-move succeeds, the upload folder is ready for another intake; retry or resume of
-the accepted run must use the result run folder, discoverable through
-`recon_sp_index_results`, not by re-indexing the upload folder.
+is moved into the result run folder under `Invoice/`. The supervisor writes only
+the MCP response `structuredContent.data` object as the source-move receipt; it
+must not write the full MCP envelope with top-level `schema_version`,
+`operation`, `status`, `data`, or `error`. The supervisor then resumes with
+`--source-move-receipt`. Billing candidate preparation must not begin until
+parsed publication and the source move are complete. After the move succeeds,
+the upload folder is ready for another intake; retry or resume of the accepted
+run must use the result run folder, discoverable through `recon_sp_index_results`,
+not by re-indexing the upload folder.
 
 ## Billing-Candidate Pause
 
