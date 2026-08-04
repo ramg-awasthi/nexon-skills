@@ -56,12 +56,14 @@ argument, output, exception, audit record, or durable receipt.
 
 Result upload starts with `recon_sp_prepare_result_uploads`. The agent sends
 only the runtime-frozen artifact metadata: `local_path`, `relative_path`,
-`sha256`, and `size_bytes`. The MCP returns a short-lived upload session under
-`/mcp/artifact/...`; the runtime command `nexon-recon upload-result-artifacts`
-streams the local file bytes and writes the small publication receipt used by
-`nexon-recon resume`. Do not display, summarize, truncate, edit, rebuild, or
-transform artifact content into text payloads in the agent. Do not print upload tokens,
-artifact URLs, or full upload-session receipts.
+`sha256`, and `size_bytes`. The MCP returns a compact upload-session receipt
+and stores the full per-file upload session server-side for a short TTL. The
+runtime command `nexon-recon upload-result-artifacts` fetches that full session
+from the receipt route, streams the local file bytes, and writes the small
+publication receipt used by `nexon-recon resume`. Do not display, summarize,
+truncate, edit, rebuild, or transform artifact content into text payloads in
+the agent. Do not print raw MCP responses, session tokens, upload tokens,
+artifact URLs, or full upload-session payloads.
 
 ## Database Boundaries
 
