@@ -16,6 +16,7 @@ exposes only:
 recon_sp_get_capabilities
 recon_sp_probe
 recon_sp_index_sources
+recon_sp_index_results
 recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
@@ -68,13 +69,14 @@ Database credentials and DSNs remain exclusively in the Database MCP service
 environment. The Fleet agent receives only MCP operations and sanitized
 receipts.
 
-Core billing lookup uses one frozen plain `request` object sent unchanged to
-`recon_db_get_billing_candidates`. The agent cannot author core SQL, add
-identifiers, split batches, or select physical database columns; mapping and
-query ownership remain in versioned MCP code/config. Fleet must not log full
-invoice lines, account details, credentials, DSNs, SQL parameters, or raw MCP
-response payloads; Database MCP server-side request logging follows its own
-audited service contract.
+Core billing lookup uses `recon_db_prepare_billing_candidates` to get a scoped
+session, then `nexon-recon billing-candidates` with the frozen runtime plan and
+session. The agent cannot call the billing-candidate MCP tool directly, author
+core SQL, add identifiers, split batches, or select physical database columns;
+mapping and query ownership remain in versioned MCP code/config. Fleet must not
+log full invoice lines, account details, credentials, DSNs, SQL parameters,
+scoped upload tokens, or raw MCP response payloads; Database MCP server-side
+request logging follows its own audited service contract.
 
 `recon_db_read_query` is allowed only for a bounded exception investigation or
 controlled diagnostic. The request must be read-only, scoped to known
@@ -121,7 +123,8 @@ Invoices:
 
 Database:
 
-1. `recon_db_get_billing_candidates` for the normal reconciliation lookup.
+1. `recon_db_prepare_billing_candidates` plus `nexon-recon billing-candidates`
+   for the normal reconciliation lookup.
 2. Bounded `recon_db_read_query` only for exception investigation or an
    approved diagnostic.
 3. No free-form database client, model-authored core SQL, direct credential
