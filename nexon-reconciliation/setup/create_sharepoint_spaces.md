@@ -50,6 +50,7 @@ Bind the environment-appropriate SharePoint Intake MCP connection exposing:
 recon_sp_get_capabilities
 recon_sp_probe
 recon_sp_index_sources
+recon_sp_index_results
 recon_sp_resolve_source_identity
 recon_sp_prepare_download
 recon_sp_prepare_reference_test
@@ -87,9 +88,9 @@ nexon-recon preflight \
 6. Start harmless result artifact upload sessions with
    `recon_sp_prepare_result_uploads`, then stream the files with
    `nexon-recon upload-result-artifacts`.
-7. Re-index and re-download the result artifacts through MCP to verify the
-   result upload path. Use `recon_sp_move_source` only for a runtime-emitted
-   source-move request; do not use native SharePoint moves in the runtime path.
+7. Confirm the runtime accepts the MCP upload receipt. Use
+   `recon_sp_move_source` only for a runtime-emitted parsed source-move request;
+   do not use native SharePoint moves in the runtime path.
 
 Normal runs validate that source and reference folders already exist and fail
 closed when an operational source folder is missing. The upload tool may create

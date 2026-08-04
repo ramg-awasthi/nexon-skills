@@ -2,18 +2,23 @@
 
 ## Core Rule
 
-Core reconciliation uses one deterministic Database MCP operation:
+Core reconciliation uses one deterministic runtime command:
 
 ```text
-recon_db_get_billing_candidates
+nexon-recon billing-candidates
 ```
 
-The agent does not author, edit, repair, or retry core billing SQL. The Database
-MCP owns the versioned physical-column mapping, provider identifier precedence,
-read-only query, schema validation, transaction isolation, row limits, and
-sanitized audit receipt. Dev and prod may bind to different schemas, but they
-must implement the same contract and declare their mapping version and schema
-fingerprint.
+Fleet first calls `recon_db_prepare_billing_candidates` with the runtime-emitted
+plan SHA/size to get a scoped upload session. The command then streams the plan
+through that session to the configured Database MCP billing-candidate operation,
+`recon_db_get_billing_candidates`, without placing full invoice-line payloads
+in Fleet tool arguments. The agent does not call that MCP tool directly during
+normal runs and does not author, edit, repair, or retry core billing SQL. The
+Database MCP owns the versioned physical-column mapping, provider identifier
+precedence, read-only query, schema validation, transaction isolation, row
+limits, and sanitized audit receipt. Dev and prod may bind to different
+schemas, but they must implement the same contract and declare their mapping
+version and schema fingerprint.
 
 ## Frozen Plain Request
 
@@ -25,7 +30,8 @@ plan exposes:
 
 - `request_identity`: non-secret environment, run ID, and mapping version for
   sanity checks;
-- `request`: the exact plain argument object to send to the Database MCP.
+- `request`: the exact plain argument object used internally by the runtime
+  command.
 
 The request is built and frozen inside the deterministic runtime. It contains:
 
@@ -38,32 +44,27 @@ The request is built and frozen inside the deterministic runtime. It contains:
 - requested mapping version;
 - idempotency key.
 
-Call `recon_db_get_billing_candidates` exactly once with the unchanged request
-fields from the plan:
+Call `recon_db_prepare_billing_candidates` exactly once with the runtime-emitted
+plan SHA/size, save the scoped session response, then run the command exactly
+once with the frozen plan and session:
 
 ```text
-{
-  "environment": <request.environment>,
-  "run_id": <request.run_id>,
-  "provider": <request.provider>,
-  "accounts": <request.accounts>,
-  "periods": <request.periods>,
-  "invoice_lines": <request.invoice_lines>,
-  "mapping_version": <request.mapping_version>,
-  "idempotency_key": <request.idempotency_key>
-}
+nexon-recon billing-candidates \
+  --plan <billing_candidate_plan.json> \
+  --session <billing_candidate_session.json> \
+  --output <candidate_response.json>
 ```
 
-Do not summarize, rewrite, split, or inspect invoice details beyond what is
-needed to pass the unchanged request. Do not translate field names, add guessed
-columns, generate SQL chunks, or replace it with `recon_db_read_query`.
+Do not summarize, rewrite, split, print, or inspect invoice details beyond the
+runtime command. Do not translate field names, add guessed columns, generate SQL
+chunks, paste `invoice_lines` into MCP arguments, expose the scoped upload
+token, or replace the lookup with `recon_db_read_query`.
 
 ## Response And Resume
 
-Save the complete unchanged MCP response returned by
-`recon_db_get_billing_candidates` as a restricted temporary response, then
-resume. Do not save only `request`, `request_identity`, a summary, or
-model-written reconstruction:
+The command writes the complete unchanged MCP response as a restricted
+temporary response, then resume. Do not save only `request`, `request_identity`,
+a summary, or model-written reconstruction:
 
 ```text
 nexon-recon resume \

@@ -20,14 +20,14 @@ Stage order:
 2. run creation from the authoritative started run ID when a DB run start exists
 3. archive validation
 4. provider parsing and source accounting
-5. parsed-output publication and re-download verification
+5. parsed-output publication and source move
 6. billing-candidate request/response handoff
 7. deterministic comparison
 8. core persistence or audited report-only skip
 9. raw workbook
 10. exception investigation when unresolved rows exist
 11. refined workbook
-12. final publication and re-download verification
+12. final publication
 13. validation
 14. notification when enabled
 
@@ -47,17 +47,17 @@ endpoints, and authorization headers remain outside run artifacts.
 
 Every run contains its run, audit, parser, unpack, warning, normalized-line,
 runtime-identity, and frozen-settings artifacts. Reconciliation also exposes a
-SharePoint-facing parsed phase under `Invoice/` and `ParsedOutput/`, then later
-records the billing-candidate contract identity, sanitized query receipt,
-matching evidence, `ReconciledOutput/` reports, investigation evidence when
-applicable, and publication verification.
+SharePoint-facing parsed phase under `ParsedOutput/`, moves the original upload
+into the result run folder under `Invoice/`, then later records the
+billing-candidate contract identity, sanitized query receipt, matching
+evidence, `ReconciledOutput/` reports, investigation evidence when applicable,
+and publication verification.
 
 ## Parsed Publication Pause
 
 `awaiting_parsed_publication` means provider parsing is complete and the
 runtime has frozen a small parsed artifact set before DB matching begins. The
-set contains the original invoice package under `Invoice/`, plus
-`ParsedOutput/raw_parsed_invoice.csv` and
+set contains `ParsedOutput/raw_parsed_invoice.csv` and
 `ParsedOutput/parser_manifest.json`.
 
 The supervisor prepares upload sessions only for that frozen set through
@@ -67,24 +67,31 @@ The supervisor prepares upload sessions only for that frozen set through
 `nexon-recon upload-result-artifacts` with that receipt and the frozen
 `parsed_publication_set.json`. The runtime streams bytes through
 `/mcp/artifact/...` and writes the small parsed publication receipt. The
-supervisor then re-indexes the result run folder, re-downloads every item
-through SharePoint MCP, and resumes with `--parsed-publication-receipt` plus one
-`--parsed-publication-verification-receipt` per uploaded item. Billing
-candidate preparation must not begin until this parsed publication is verified.
+SharePoint MCP upload receipt is the server-side verification, so the
+supervisor must not re-index or re-download parsed artifacts for SHA checks.
+The supervisor resumes with `--parsed-publication-receipt`. For manual-upload
+runs, the runtime then emits `awaiting_source_move`; the supervisor calls
+`recon_sp_move_source` with the unchanged runtime request so the original upload
+is moved into the result run folder under `Invoice/`, saves the move receipt,
+and resumes with `--source-move-receipt`. Billing candidate preparation must
+not begin until parsed publication and the source move are complete. After the
+move succeeds, the upload folder is ready for another intake; retry or resume of
+the accepted run must use the result run folder, discoverable through
+`recon_sp_index_results`, not by re-indexing the upload folder.
 
 ## Billing-Candidate Pause
 
 `awaiting_billing_candidates` means:
 
-- `manifest/billing_candidate_plan.json` contains one non-secret
-  `request_identity` and one frozen plain `request` object for
-  `recon_db_get_billing_candidates`;
+- `manifest/billing_candidate_plan.json` contains the frozen request used by
+  `nexon-recon billing-candidates`;
 - the request is built only by the deterministic runtime and includes typed
   provider accounts, invoice-derived effective periods, normalized line
   identifiers, mapping version, and idempotency key;
-- the supervisor calls the MCP operation exactly once with
-  the plain request fields copied unchanged from the plan and saves the
-  complete unchanged response temporarily;
+- the supervisor gets a scoped session with
+  `recon_db_prepare_billing_candidates`, then runs
+  `nexon-recon billing-candidates --plan ... --session ... --output ...`
+  exactly once and does not paste invoice lines into MCP arguments;
 - the same run resumes with `--billing-candidate-response`;
 - the runtime validates the response schema, environment, run ID, mapping
   version, schema contract/fingerprint, input hash, candidate identities, and
@@ -142,10 +149,10 @@ checksums for final evidence and `ReconciledOutput/`.
 `recon_sp_prepare_result_uploads` returns scoped upload sessions for the exact
 final result set. `nexon-recon upload-result-artifacts` streams the files to the
 MCP artifact URLs and writes the sanitized receipt accepted by the runtime.
-After uploaded artifacts are re-indexed, prepared, downloaded, and compared by
-relative path and SHA-256, manual-upload runs emit a source-move request. The
-supervisor sends that unchanged request to `recon_sp_move_source`, saves the
-server-verified move receipt, and resumes with `--source-move-receipt`.
+The SharePoint MCP upload receipt is the server-side verification, so the
+supervisor resumes with `--publication-receipt` only. Manual-upload sources are
+not moved at final publication because they were already moved after parsed
+publication.
 
 ## Status And Matching Rules
 
@@ -164,7 +171,7 @@ explicit report/exception rows rather than silently dropped.
 Resolve config intent against capability first: disabled optional features are
 skipped, while enabled unavailable or required unavailable features block.
 Required capability, probe, index, preparation, fetch, parsing, candidate,
-matching, report, publication, and re-download failures stop the run. Missing
+matching, report, publication, and server-side upload verification failures stop the run. Missing
 optional reference fixtures map to `sharepoint_folder_not_found` and do not
 trigger folder creation or notification.
 

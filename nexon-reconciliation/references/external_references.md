@@ -33,14 +33,16 @@ Nexon Recon Database MCP owns the versioned core billing candidate operation:
 ```text
 recon_db_start_run
 recon_db_update_run
+recon_db_prepare_billing_candidates
 recon_db_get_billing_candidates
 ```
 
 The runtime prepares run-start and progress-update requests; the supervisor sends
-them unchanged and preserves receipts. For billing candidates, the runtime
-submits one frozen plain `request` object and resumes with the unchanged MCP
-response through `--billing-candidate-response`. Provider mappings and core SQL
-remain deterministic, tested MCP code/config.
+them unchanged and preserves receipts. For billing candidates, the supervisor
+gets a scoped session with `recon_db_prepare_billing_candidates`, runs
+`nexon-recon billing-candidates --plan ... --session ... --output ...`, then
+resumes with the generated response through `--billing-candidate-response`.
+Provider mappings and core SQL remain deterministic, tested MCP code/config.
 The bounded
 `recon_db_read_query` operation is available only for exception investigation
 and controlled diagnostics, never for normal candidate generation.
