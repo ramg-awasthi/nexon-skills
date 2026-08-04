@@ -68,10 +68,13 @@ to `nexon-recon-exception-investigator`.
    frozen parsed artifact set with `recon_sp_prepare_result_uploads`. Pass only
    frozen metadata: `provider`, `year`, `month`, `run_id`, `local_path`,
    `relative_path`, `sha256`, and `size_bytes`. Save `structuredContent.result`
-   as the parsed upload-session receipt, then run
+   as the compact parsed upload-session receipt. Do not print raw MCP
+   responses, session tokens, upload tokens, artifact URLs, or full
+   upload-session payloads. Then run
    `nexon-recon upload-result-artifacts` with that receipt and the frozen
-   `parsed_publication_set.json` to stream bytes through `/mcp/artifact/...`
-   and write the small parsed publication receipt. Resume with only
+   `parsed_publication_set.json`; the runtime fetches the full upload session
+   from the MCP receipt route, streams bytes through `/mcp/artifact/...`, and
+   writes the small parsed publication receipt. Resume with only
    `--parsed-publication-receipt`. If the runtime returns
    `awaiting_source_move`, call `recon_sp_move_source` with the unchanged
    runtime request so the original upload is moved into the result run folder
@@ -104,8 +107,9 @@ to `nexon-recon-exception-investigator`.
    resolutions remain disabled.
 11. Prepare upload sessions for the frozen final artifact set with
    `recon_sp_prepare_result_uploads` metadata only, run
-   `nexon-recon upload-result-artifacts` with the returned upload session and
-   frozen `publication_set.json`, save the small final
+   `nexon-recon upload-result-artifacts` with the compact receipt and frozen
+   `publication_set.json`; the runtime fetches the full upload session from the
+   MCP receipt route. Save the small final
    publication receipt, and resume with `--publication-receipt`. Do not
    re-index or re-download final artifacts for SHA checks; the SharePoint MCP
    upload receipt is the server-side verification. Do not move the source at

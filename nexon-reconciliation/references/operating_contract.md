@@ -63,10 +63,11 @@ set contains `ParsedOutput/raw_parsed_invoice.csv` and
 The supervisor prepares upload sessions only for that frozen set through
 `recon_sp_prepare_result_uploads`. Only frozen metadata is sent:
 `local_path`, `relative_path`, `sha256`, and `size_bytes`. The supervisor saves
-`structuredContent.result` as the parsed upload-session receipt and runs
-`nexon-recon upload-result-artifacts` with that receipt and the frozen
-`parsed_publication_set.json`. The runtime streams bytes through
-`/mcp/artifact/...` and writes the small parsed publication receipt. The
+`structuredContent.result` as the compact parsed upload-session receipt and
+runs `nexon-recon upload-result-artifacts` with that receipt and the frozen
+`parsed_publication_set.json`. The runtime fetches the full upload session from
+the MCP receipt route, streams bytes through `/mcp/artifact/...`, and writes the
+small parsed publication receipt. The
 SharePoint MCP upload receipt is the server-side verification, so the
 supervisor must not re-index or re-download parsed artifacts for SHA checks.
 The supervisor resumes with `--parsed-publication-receipt`. For manual-upload
@@ -149,9 +150,11 @@ the core candidate operation or invent invoice rows.
 
 `awaiting_publication` freezes local paths, result-relative paths, and
 checksums for final evidence and `ReconciledOutput/`.
-`recon_sp_prepare_result_uploads` returns scoped upload sessions for the exact
-final result set. `nexon-recon upload-result-artifacts` streams the files to the
-MCP artifact URLs and writes the sanitized receipt accepted by the runtime.
+`recon_sp_prepare_result_uploads` returns a compact upload-session receipt for
+the exact final result set while the full per-file upload session stays
+server-side. `nexon-recon upload-result-artifacts` fetches that full session
+from the MCP receipt route, streams the files to the MCP artifact URLs, and
+writes the sanitized receipt accepted by the runtime.
 The SharePoint MCP upload receipt is the server-side verification, so the
 supervisor resumes with `--publication-receipt` only. Manual-upload sources are
 not moved at final publication because they were already moved after parsed
