@@ -41,7 +41,9 @@ to `nexon-recon-exception-investigator`.
 ## Sequence
 
 1. Collect provider, run mode, intake mode, exact filename when supplied, and
-   billing period for reconciliation.
+   a requested billing period only when the user supplies one. For manual
+   upload, do not ask for billing period up front; the runtime infers the
+   invoice-derived period from the invoice package after parsing.
 2. Save unchanged SharePoint capability/probe results. For reconciliation also
    save unchanged Database MCP capability/probe results.
 3. Run `nexon-recon preflight` with the selected mode/provider and receipt
@@ -96,8 +98,11 @@ to `nexon-recon-exception-investigator`.
 
 ## Billing Periods
 
-Production blocks a requested/invoice period mismatch. Dev historical-fixture
-tests require explicit reason, actor, and expiry, preserve both periods, and use
+For manual-upload reconciliation, invoice-derived periods are the default. Do
+not ask for a billing period before source download and parsing. If the user
+explicitly supplies a requested period, production blocks a requested/invoice
+period mismatch. Dev historical-fixture tests for an explicit requested-period
+mismatch require reason, actor, and expiry, preserve both periods, and use
 invoice windows for candidate retrieval and matching.
 
 ## Required Accounting
