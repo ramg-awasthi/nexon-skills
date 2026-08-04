@@ -96,11 +96,14 @@ unresolved. Billing-only rows are retained in the reports and exception set.
 
 ## Billing Period
 
-Invoice-derived effective periods scope the candidate lookup. A production
-mismatch between requested and invoice periods fails closed. A historical
-non-production fixture may proceed only with an explicit test-override reason
-and actor plus a timezone-aware future expiry recorded in the audit; the
-invoice-derived periods remain the query scope.
+Invoice-derived effective periods scope the candidate lookup. If the user did
+not request a target period, the runtime infers the run period from the parsed
+invoice package and no mismatch override is needed. A production mismatch
+between an explicit requested period and invoice periods fails closed. A
+historical non-production fixture with an explicit requested-period mismatch
+may proceed only with a test-override reason and actor plus a timezone-aware
+future expiry recorded in the audit; the invoice-derived periods remain the
+query scope.
 
 ## Exception Diagnostic SQL
 
