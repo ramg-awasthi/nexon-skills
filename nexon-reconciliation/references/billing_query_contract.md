@@ -129,7 +129,7 @@ Provisional, zero-match, multi-match, and conflicting evidence on invoice rows
 remains unresolved. The broad unassociated billing-system population is kept in
 `02_Pre-Reconciliation/pre-reconciliation.<locked format>` for temporary E2E
 diagnosis. It is not an invoice exception and does not enter agent investigation
-or `03_Reconciled-Output/refined-reconciliation.<locked format>`. This reporting
+or `03_Reconciled-Output/<supplier-invoice-id>-refined-reconciliation.<locked format>`. This reporting
 rule does not narrow, truncate, or rerun the MCP query.
 
 For AAPT, deterministic runtime matching confirms provider AAPT through the

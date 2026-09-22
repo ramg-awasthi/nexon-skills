@@ -63,7 +63,10 @@ from the receipt route, streams the local file bytes, and writes the small
 publication receipt used by `nexon-recon resume`. Do not display, summarize,
 truncate, edit, rebuild, or transform artifact content into text payloads in
 the agent. Do not print raw MCP responses, session tokens, upload tokens,
-artifact URLs, or full upload-session payloads.
+artifact URLs, or full upload-session payloads. After final validation, the only
+URLs that may be shown to the user are stable, validated SharePoint `webUrl`
+values returned under runtime `report_links` for the reconciliation and Financial
+Audit reports.
 
 ## Database Boundaries
 
