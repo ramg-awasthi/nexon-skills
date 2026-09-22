@@ -228,7 +228,7 @@ publication; verification never edits a report to make it pass.
 
 `awaiting_publication` occurs only after required investigation batches are
 accepted and freezes local paths, result-relative paths, and checksums for
-final evidence, `03_Reconciled-Output/refined-reconciliation.<locked format>`, and
+final evidence, `03_Reconciled-Output/<supplier-invoice-id>-refined-reconciliation.<locked format>`, and
 `04_Financial-Audit/financial-audit.<locked format>`.
 `recon_sp_prepare_result_uploads` returns a compact upload-session receipt for
 the exact final result set while the full per-file upload session stays
@@ -244,8 +244,8 @@ publication.
 
 The temporary pre-reconciliation report preserves the complete deterministic
 comparison for E2E diagnosis; it is not the refined result. The refined report
-is generated only after required agent verification and preserves every
-business/source report field defined by runtime `RAW_WORKBOOK_COLUMNS` while
+is generated only after required agent verification and uses the
+renamed and reduced business report schema defined by runtime `RECON_REPORT_COLUMNS` while
 adding approved agent and human-review fields. Internal line/candidate fields
 are intentionally omitted; exact source-line lineage is preserved in
 `report_aggregation_manifest.json`. The format is frozen at run creation:
@@ -268,7 +268,11 @@ investigation or the refined report. Deterministic zero-net exclusions also do
 not enter investigation.
 They are reported as exclusions and never counted as matched.
 
-The financial-audit report is the fourth report and runs after refinement. For
+The financial-audit report runs after refinement. It remains a standalone
+`04_Financial-Audit/financial-audit.<locked format>` artifact. For XLSX runs,
+the same rows are also embedded as a separate `Financial Audit` tab beside
+`Recon Result` in the invoice-scoped refined workbook; CSV runs keep only the
+standalone audit because CSV cannot contain tabs. For
 AAPT it preserves the `rec001` supplier breakdown, actual GST payable, current
 charges including GST, previous account movements, detailed supplier-line
 total, refined supplier total, and explicit exclusions. These are financial
