@@ -244,9 +244,9 @@ publication.
 
 The temporary pre-reconciliation report preserves the complete deterministic
 comparison for E2E diagnosis; it is not the refined result. The refined report
-is generated only after required agent verification and uses the
-renamed and reduced business report schema defined by runtime `RECON_REPORT_COLUMNS` while
-adding approved agent and human-review fields. Internal line/candidate fields
+is generated only after required agent verification and uses the business report
+schema defined by runtime `RECON_REPORT_COLUMNS`, including the approved agent
+and human-review fields. Internal line/candidate fields
 are intentionally omitted; exact source-line lineage is preserved in
 `report_aggregation_manifest.json`. The format is frozen at run creation:
 `xlsx` is the default and `NEXON_RECON_REPORT_FORMAT=csv` selects CSV. Publication uses the
@@ -277,8 +277,15 @@ AAPT it preserves the `rec001` supplier breakdown, actual GST payable, current
 charges including GST, previous account movements, detailed supplier-line
 total, refined supplier total, and explicit exclusions. These are financial
 controls only. GST and supplier/customer amount differences never alter service
-matching. A failed control preserves generated evidence but blocks a successful
-terminal validation with `financial_audit_failed`.
+matching. A financial-control mismatch is a non-blocking validation outcome.
+The run completes with `validation=completed_with_audit_mismatch` and publishes
+both reports. The audit summary records invoice, control, expected amount,
+actual amount, difference, currency, and reason. Missing, corrupt, changed, or
+unpublished artifacts remain blocking technical failures.
+The report contains `CurrentCategoryControlReason`, `CurrentGSTControlReason`,
+`SupplierLineControlReason`, and `RefinedTotalControlReason`; every reason states
+pass/fail, expected amount, actual amount, difference, currency, and the
+control-specific explanation.
 
 ## Failure Contract
 
