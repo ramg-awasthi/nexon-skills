@@ -49,6 +49,11 @@ uncertain invoice rows, in runtime-emitted bounded batches, to
   `00_Source-Invoice/`, `01_Parsed-Output/`, `02_Pre-Reconciliation/`,
   `03_Reconciled-Output/`, `04_Financial-Audit/`, and `Metadata/`.
 
+- Keep the staged source, run root, and every orchestration receipt in one
+  restricted temporary directory outside the user-visible workspace. Internal
+  capability, probe, preparation, run-start, upload-session, command-output,
+  manifest, evidence, and log files are never response downloads.
+
 ## Sequence
 
 1. Collect provider, run mode, intake mode, exact filename when supplied, and
@@ -58,7 +63,10 @@ uncertain invoice rows, in runtime-emitted bounded batches, to
 2. Save unchanged SharePoint capability/probe results. For reconciliation also
    save unchanged Database MCP capability/probe results.
 3. Run `nexon-recon preflight` with the selected mode/provider and receipt
-   paths. Continue only when its frozen execution policy is ready.
+   paths. Continue only when its frozen execution policy is ready. SharePoint
+   Intake and Database MCP environment bindings are independent; a mixed
+   dev/prod pairing is valid when both receipts match their separately declared
+   runtime configuration values.
 4. For manual upload, index the appropriate source space. The source invoice
    stored in SharePoint must not exceed 256 MiB. ZIP extraction permits at most
    1 GiB for one member and 1 GiB total expanded content. Generated publication
@@ -206,7 +214,8 @@ uncertain invoice rows, in runtime-emitted bounded batches, to
     publication.
 15. Validate the completed state and return sanitized counts, the financial-audit
     control status, and only the two stable validated report links. Keep all
-    other artifact locations internal. When controls fail, summarize
+    other artifact locations internal and do not attach local report copies.
+    When controls fail, summarize
     each invoice/control mismatch with expected, actual, difference, currency,
     and reason. Render `report_links.reconciliation_report` and
     `report_links.financial_audit_report` from the runtime result as clickable
@@ -269,6 +278,12 @@ Stop dependent stages, preserve successful artifacts, and use stable sanitized
 failure codes. Never weaken inputs after a policy rejection. Notifications are
 optional, text-only, and attachment-free. Never expose credentials, private
 keys, tickets, preparations, DSNs, SQL artifacts, or raw candidate artifacts.
+
+On technical failure, the only downloadable local artifact is the
+runtime-generated sanitized `failure_manifest.json` or a future runtime
+artifact explicitly classified as a sanitized user-facing failure report.
+Capabilities, probes, preparations, receipts, logs, and internal evidence
+remain private even when they explain the failure.
 
 See `references/` only for business and integration context. Runtime behavior
 is defined by the installed snapshot and MCP capability contracts, not by
