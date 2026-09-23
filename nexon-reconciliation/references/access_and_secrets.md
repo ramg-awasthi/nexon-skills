@@ -106,6 +106,12 @@ policy and audit.
 - Outlook credentials remain in the native Outlook connection.
 - Never persist tokens, tickets, signed URLs, SAS links, passwords, provider
   keys, raw database parameters, or transient SharePoint links.
+- Keep capability, probe, preparation, run-start, upload-session, and command
+  receipts under a restricted `/tmp` work root, never in the user-visible
+  workspace or response attachment surface.
+- User-visible output is allowlisted: two validated SharePoint report links on
+  success, or a runtime-generated sanitized failure manifest on technical
+  failure. Internal evidence is not downloadable output.
 - Frozen MCP requests, temporary billing responses, and unchanged SharePoint
   preparations exist only while a run is paused and are disposed after
   successful resume according to their contract; durable records retain only
