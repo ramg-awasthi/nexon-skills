@@ -13,6 +13,15 @@ uncertain invoice rows, in runtime-emitted bounded batches, to
 
 ## Contract
 
+- Runtime results own technical failure handling. A result with
+  `user_input_required: false` and `next_action: operator_repair` ends execution
+  with its sanitized failure manifest. Preserve the checkpoint for a later
+  operator-directed resume; do not create new upload sessions or ask the invoice
+  user to choose retries or escalation.
+- Operational runs use released instructions. Persistent instruction and memory
+  editing tools must be excluded from the deployed operational tool set;
+  instruction maintenance is a separate reviewed release activity.
+
 - Run deterministic operations only through `nexon-recon`. Do not search for
   scripts, run skill files, pass a config path, install packages, or create
   runtime symlinks.
