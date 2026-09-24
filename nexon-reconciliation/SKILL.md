@@ -284,9 +284,21 @@ re-download a report to recompute its checksum.
 ## Failure Rules
 
 Stop dependent stages, preserve successful artifacts, and use stable sanitized
-failure codes. Never weaken inputs after a policy rejection. Notifications are
-optional, text-only, and attachment-free. Never expose credentials, private
-keys, tickets, preparations, DSNs, SQL artifacts, or raw candidate artifacts.
+failure codes. Never weaken inputs after a policy rejection.
+
+For a failed run, use `nexon-recon recover --resume-run-root <run_root>` as a
+read-only assessment when the installed runtime supports it. Include the
+preserved `--investigation` manifest for an exception-investigation failure.
+Report an ineligible or unavailable assessment without forcing a replay or
+editing run state. For an eligible plan, show its run ID, failed stage, failure
+code, runtime image change (if any), and exact `approval_code`. Apply only the
+plan the user approves by returning that code. Resume the original frozen
+inputs only after `recover --approve` records `awaiting_retry`; preserve all
+required MCP receipt checks. Keep recovery plans and receipts internal.
+
+Notifications are optional, text-only, and attachment-free. Never expose
+credentials, private keys, tickets, preparations, DSNs, SQL artifacts, or raw
+candidate artifacts.
 
 On technical failure, the only downloadable local artifact is the
 runtime-generated sanitized `failure_manifest.json` or a future runtime

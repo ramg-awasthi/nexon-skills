@@ -10,9 +10,13 @@ run.
 
 ## Run States And Stage Order
 
-Run states are `created`, `running`, `completed`, and `failed`. A pause remains
-`running` with its current stage marked `running`. `completed` requires final
-validation; `failed` is terminal.
+Run states are `created`, `running`, `awaiting_retry`, `completed`, and `failed`.
+A pause remains `running` with its current stage marked `running`. `completed`
+requires final validation. Ordinary resume does not accept a `failed` run.
+The installed runtime can assess that run for recovery without changing state;
+only a safe, user-approved plan may move an eligible stage to `awaiting_retry`.
+The prior failure and frozen evidence remain in recovery history. Existing
+bound MCP receipt checks still govern any external write.
 
 Stage order:
 
