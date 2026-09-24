@@ -287,6 +287,13 @@ Final report files use the format locked by the runtime at run creation.
 extensions from the frozen artifact set. Do not rename, convert, re-save, or
 re-download a report to recompute its checksum.
 
+In refined verification, `financial_controls` checks whether the audit
+faithfully represents the source and report. A correctly recorded business
+mismatch is a `passed` verification check with the invoice, control, expected,
+actual, and difference amounts in its reason. A missing, changed, or incorrect
+audit is a `failed` verification check. Review all five checks and the
+overall receipt status together before submitting.
+
 ## Failure Rules
 
 Stop dependent stages, preserve successful artifacts, and use stable sanitized
@@ -299,15 +306,21 @@ stage attempt. Do not repeat an unchanged submission, replay an external MCP
 write, or alter frozen evidence. Read the refined-verification input for its
 reason-length limit. A recorded `failed` run follows the recovery policy below.
 
-For a failed run, use `nexon-recon recover --resume-run-root <run_root>` as a
-read-only assessment when the installed runtime supports it. Include the
-preserved `--investigation` manifest for an exception-investigation failure.
-Report an ineligible or unavailable assessment without forcing a replay or
-editing run state. For an eligible plan, show its run ID, failed stage, failure
-code, runtime image change (if any), and exact `approval_code`. Apply only the
-plan the user approves by returning that code. Resume the original frozen
-inputs only after `recover --approve` records `awaiting_retry`; preserve all
-required MCP receipt checks. Keep recovery plans and receipts internal.
+For a failed run, inspect a fresh read-only plan with
+`nexon-recon recover --resume-run-root <run_root>`. Include the preserved
+`--investigation` manifest
+for an exception-investigation failure. If your own submission or command
+caused the failure, correct its local input. When the plan says
+`agent_repair_eligible: true`, call `recover --agent-repair` with the same
+run root, required investigation manifest, and a concrete `--reason`. Resume
+only after it records `awaiting_retry`, using the original frozen inputs and
+required MCP receipt checks. Never replay an external write or repeat an
+unchanged submission. The runtime permits one agent repair per stage.
+
+If agent repair is ineligible or unavailable, preserve the checkpoint and
+explain the status in ordinary business language. The separate operator path
+uses a fresh plan and `recover --approve` when explicit approval is required.
+Keep approval codes, recovery plans, and receipts out of invoice-user output.
 
 Notifications are optional, text-only, and attachment-free. Never expose
 credentials, private keys, tickets, preparations, DSNs, SQL artifacts, or raw

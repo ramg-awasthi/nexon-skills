@@ -20,7 +20,9 @@ because a document was rejected. The bounded stage-attempt budget applies to
 processing attempts after validation, not to rejected submissions.
 A `failed` run cannot use ordinary resume. The installed runtime can assess it
 for recovery without changing state;
-only a safe, user-approved plan may move an eligible stage to `awaiting_retry`.
+a safe, plan-bound agent repair may reopen an eligible local stage after an
+agent-caused error. Other eligible stages retain operator approval before
+`awaiting_retry`.
 The prior failure and frozen evidence remain in recovery history. Existing
 bound MCP receipt checks still govern any external write.
 
