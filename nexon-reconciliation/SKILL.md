@@ -286,6 +286,13 @@ re-download a report to recompute its checksum.
 Stop dependent stages, preserve successful artifacts, and use stable sanitized
 failure codes. Never weaken inputs after a policy rejection.
 
+When runtime validation rejects an agent-submitted manifest, receipt, or
+billing response while the run remains `running` or `awaiting_retry`, correct
+the document and resume the same run. Rejected submissions do not consume a
+stage attempt. Do not repeat an unchanged submission, replay an external MCP
+write, or alter frozen evidence. Read the refined-verification input for its
+reason-length limit. A recorded `failed` run follows the recovery policy below.
+
 For a failed run, use `nexon-recon recover --resume-run-root <run_root>` as a
 read-only assessment when the installed runtime supports it. Include the
 preserved `--investigation` manifest for an exception-investigation failure.
