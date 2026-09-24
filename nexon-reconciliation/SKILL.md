@@ -170,7 +170,7 @@ uncertain invoice rows, in runtime-emitted bounded batches, to
 12. On `awaiting_exception_investigation`, use the returned
    `exception_input_manifest`, which references
    `Metadata/evidence/exception_input.json` and its batch files. Delegate each referenced
-   batch to `nexon-recon-exception-investigator`; batches contain at most 100
+   batch to `nexon-recon-exception-investigator`; batches contain at most 500
    genuine uncertain invoice rows, 20 embedded candidates per row, and 512 KiB
    serialized. A true count above 20 is valid when the line appears in
    `candidate_overflow_lines`, keeps its true `candidate_counts` value, and has

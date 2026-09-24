@@ -176,7 +176,7 @@ verified.
 
 `awaiting_exception_investigation` returns `exception_input_manifest`, which
 points to `Metadata/evidence/exception_input.json` and references runtime-emitted files
-under `Metadata/evidence/exception_batches/`. Each batch contains at most 100 genuine
+under `Metadata/evidence/exception_batches/`. Each batch contains at most 500 genuine
 uncertain invoice rows, 20 embedded candidate records per row, and 512 KiB
 serialized. If a true count exceeds 20, the runtime preserves it in
 `candidate_counts`, identifies the line in `candidate_overflow_lines`, and
