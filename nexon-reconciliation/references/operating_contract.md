@@ -236,15 +236,41 @@ publication; verification never edits a report to make it pass.
 
 ## Publication Pause
 
+Plan the frozen final set before asking SharePoint MCP for an upload session:
+
+```text
+nexon-recon publication-batches plan --publication-set <frozen-set> --output-dir <batch-dir>
+```
+
+Use the generated batches in order. Each holds at most 10 files and 32 MiB by
+default, with a larger file alone. Prepare each MCP session only when ready to
+upload its batch, save the compact session receipt, and run
+`nexon-recon upload-result-artifacts` with Execute `timeout: 0`. Check for an
+`artifacts_uploaded` receipt before preparing the next batch. If Execute stops
+without a final result, inspect the output path. An
+`artifact_upload_in_progress` receipt identifies confirmed uploads and the
+in-flight file; it does not confirm the batch. Preserve the run checkpoint for
+operator repair and do not reuse the session or upload again on an assumption.
+After all batches are confirmed, combine their receipts:
+
+```text
+nexon-recon publication-batches combine --publication-set <frozen-set> \
+  --receipt <batch-1-receipt> --receipt <batch-2-receipt> \
+  --output <final-receipt>
+```
+
+Use the combined receipt for final resume. It must cover the frozen set exactly.
+
 `awaiting_publication` occurs only after required investigation batches are
 accepted and freezes local paths, result-relative paths, and checksums for
 final evidence, `03_Reconciled-Output/<supplier-invoice-id>-refined-reconciliation.<locked format>`, and
 `04_Financial-Audit/financial-audit.<locked format>`.
 `recon_sp_prepare_result_uploads` returns a compact upload-session receipt for
-the exact final result set while the full per-file upload session stays
+the exact batch subset while the full per-file upload session stays
 server-side. `nexon-recon upload-result-artifacts` fetches that full session
 from the MCP receipt route, streams the files to the MCP artifact URLs, and
-writes the sanitized receipt accepted by the runtime.
+writes the batch's sanitized receipt. The combiner checks all batch receipts
+against the full frozen result set before final resume.
 The SharePoint MCP upload receipt is the server-side verification, so the
 supervisor resumes with `--publication-receipt` only. Manual-upload sources are
 not moved at final publication because they were already moved after parsed

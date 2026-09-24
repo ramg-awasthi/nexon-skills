@@ -207,11 +207,17 @@ uncertain invoice rows, in runtime-emitted bounded batches, to
     `RefinedTotalControlReason`. Each reason states pass/fail, expected amount,
     actual amount, difference, currency, and the control-specific explanation.
 14. Only after required agent verification and finance controls are complete,
-    prepare upload sessions
-    for the frozen final artifact set with
-    `recon_sp_prepare_result_uploads` metadata only, run
-    `nexon-recon upload-result-artifacts` with the compact receipt and frozen
-    `publication_set.json`. Its business results are
+    use `nexon-recon publication-batches plan` on the frozen
+    `publication_set.json`. Work through its count-and-size batches in order.
+    Prepare each `recon_sp_prepare_result_uploads` session when ready to upload
+    that batch, using frozen metadata only. Run
+    `nexon-recon upload-result-artifacts` with Execute `timeout: 0` and confirm
+    its `artifacts_uploaded` receipt before moving on. If Execute stops without
+    a final result, inspect the receipt at its output path. Preserve an
+    `artifact_upload_in_progress` checkpoint for operator repair; do not reuse
+    the session or upload again on an assumption. Combine confirmed batch
+    receipts with `nexon-recon publication-batches combine` and resume with the
+    combined receipt. The business-facing files are
     `03_Reconciled-Output/<supplier-invoice-id>-refined-reconciliation.<locked format>` and
     `04_Financial-Audit/financial-audit.<locked format>`; they must not exist before
     required verification and finance controls complete. The runtime fetches
