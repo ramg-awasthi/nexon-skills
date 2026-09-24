@@ -315,12 +315,12 @@ caused the failure, correct its local input. When the plan says
 run root, required investigation manifest, and a concrete `--reason`. Resume
 only after it records `awaiting_retry`, using the original frozen inputs and
 required MCP receipt checks. Never replay an external write or repeat an
-unchanged submission. The runtime permits one agent repair per stage.
+unchanged submission.
 
 If agent repair is ineligible or unavailable, preserve the checkpoint and
-explain the status in ordinary business language. The separate operator path
-uses a fresh plan and `recover --approve` when explicit approval is required.
-Keep approval codes, recovery plans, and receipts out of invoice-user output.
+explain the status in ordinary business language. Route any required approval
+to an operator through a fresh `recover` plan. Keep approval codes, recovery
+plans, and receipts out of invoice-user output.
 
 Notifications are optional, text-only, and attachment-free. Never expose
 credentials, private keys, tickets, preparations, DSNs, SQL artifacts, or raw
