@@ -6,7 +6,7 @@ Runtime boundary: the installed `nexon-recon parse --provider AAPT` command.
 
 - Complete AAPT invoice ZIP packages.
 - Enabled families: `rec001`, `rec004`, `rec005`, and `rec010`.
-- Disabled current-scope families: `rec002` and `rec006`.
+- Financial-only voice families: `rec002` and `rec006`; Inomial matching is out of scope.
 - Reference-only family: `rec012`.
 
 ## Parser Rules
@@ -14,10 +14,10 @@ Runtime boundary: the installed `nexon-recon parse --provider AAPT` command.
 - Require readable `rec001` identity/account/period data and at least one
   `rec005` primary service-charge row. Do not derive invoice identity or
   billing period from filenames or partial packages.
-- Include every present `rec004`, `rec005`, and `rec010` charge row in
-  parsed accounting. Account for `rec002` and `rec006` as disabled and
-  `rec012` as reference-only; none of those three families may create
-  matchable charge rows.
+- Include every present `rec004`, `rec005`, and `rec010` charge row in parsed
+  accounting. Stream every `rec002` and `rec006` charge into the compact voice
+  summary for complete invoice financial accounting. Voice matching against
+  Inomial is out of scope; `rec012` is reference-only.
 - Preserve provider account, the full service identifier, source file, and
   source row/page/sheet traceability. Do not cut an identifier at a dash or
   aggregate it before deterministic billing matching.
@@ -42,3 +42,17 @@ Runtime boundary: the installed `nexon-recon parse --provider AAPT` command.
   current charges including GST, previous account, payments, and previous bill
   adjustments. The header GST is authoritative; line GST rates are supporting
   source data and must not replace it.
+
+## Voice financial accounting
+
+Publish `voice-usage-summary.csv` under `01_Parsed-Output` when voice source
+rows are present. Each summary contains supplier account, invoice, source
+file/member, service type, usage type, source-row count, and amount excluding GST.
+Retain zero totals and credits. Reject malformed financial amounts and invoice
+account mismatches. Voice summary groups do not create reconciliation line IDs.
+The Financial Audit adds one column, `Voice Usage Amount Ex GST (002/006)`.
+Existing control reasons explain that voice is included in financial accounting
+and that only Inomial matching is out of scope. Compare all parsed usage,
+including `rec010`, with header usage. Include voice exactly once in complete
+source detail and refined-plus-exclusions controls before calculating the
+previous-bill adjustment split.
