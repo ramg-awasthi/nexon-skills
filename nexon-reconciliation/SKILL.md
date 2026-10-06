@@ -249,12 +249,20 @@ invoice windows for candidate retrieval and matching.
 
 Report raw rows, charge-input rows, reference/header rows, aggregation input and
 output rows, suppressed rows, normalized output rows, and financial totals.
-Do not group multiple charged source rows in 01_Parsed-Output. Raw parsed rows
-remain audit grain and billing lookup operates on eligible source lines.
-Current AAPT scope processes `rec001`, `rec004`, `rec005`, and `rec010`;
-within that enabled set, `rec001` and `rec005` are mandatory while `rec004` and
-`rec010` are optional. `rec002` and `rec006` are accounted but disabled, and
-`rec012` is reference-only. The refined output may aggregate
+Preserve individual reconciliation charge rows in `raw_parsed_invoice.csv`.
+Only the separate voice financial summary groups source usage rows; billing
+lookup continues to operate on eligible individual reconciliation lines.
+AAPT requires `rec001` invoice/account/period identity and `rec005` primary
+service charges. `rec004` and `rec010` are optional. Stream all `rec002` and
+`rec006` charges into `01_Parsed-Output/voice-usage-summary.csv` with source-row
+counts and exact amounts. Include voice in complete invoice financial accounting;
+only voice matching against Inomial is out of scope. Never treat voice summaries
+as unmatched-service exceptions. `rec012` is reference-only. Publish the
+runtime-emitted voice CSV in the frozen parsed artifact set without editing it.
+The Financial Audit adds one column, `Voice Usage Amount Ex GST (002/006)`,
+and explains the matching scope in existing reason fields. Include these amounts
+exactly once when balancing complete source detail against refined output.
+The refined output may aggregate
 only rows that already share one verified billing identity. Record every
 contributing source-line ID in `report_aggregation_manifest.json`; do not add
 internal line/candidate fields to the refined report. Preserve all `rec010`

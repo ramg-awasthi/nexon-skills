@@ -26,11 +26,12 @@ parser from the skill directory.
   lookup account, metadata account, and customer billing account.
 - Emit stable line IDs, invoice/service identifiers, billing windows, amounts,
   source provenance, warnings, and accounting.
-- For AAPT, process the enabled `rec001`, `rec004`, `rec005`, and `rec010`
-  families. Require `rec001` for invoice/account/period identity and `rec005`
-  for primary service charges; include optional `rec004` and `rec010` when present.
-  Account for `rec002` and `rec006` as disabled current-scope families and
-  `rec012` as reference-only; they must not create matchable charge lines.
+- For AAPT, require `rec001` invoice/account/period identity and `rec005`
+  primary service charges; include optional `rec004` and `rec010` when present.
+  Stream every `rec002` and `rec006` charge into `voice-usage-summary.csv`,
+  grouped by invoice/source member/service type/usage type with exact amounts
+  and source-row counts. Include voice in financial accounting; voice matching
+  against Inomial is out of scope. `rec012` is reference-only.
 - Preserve the full AAPT invoice service identifier. Do not shorten it at a
   dash or aggregate it before deterministic billing matching. Mark `rec004`
   account-level rows as reportable but not eligible for service matching.
