@@ -53,11 +53,23 @@ incompatible units separately. Missing source quantities remain blank, not zero.
 Retain zero charges and credits. Reject malformed financial amounts, quantities,
 quantity/unit pairs, and invoice account mismatches. Preserve `rec010` billed and
 raw quantities/units separately; never combine Mbps rates with MBytes volume.
+Map rec004/rec005 `Qty` to `UsageQuantity`, retaining `billed_quantity` and
+exact `Rate` as `source_unit_rate` in parsed provenance. These are billed counts,
+not voice duration or data volume. If the source does not state quantity/unit,
+show `Not supplied`; do not infer a unit from plan capacity or dates.
+Aggregate billed counts only for the same charge description, rate, period and
+unit. Keep incompatible charge bases separate and preserve source-line lineage.
 Voice summary groups create report-only IDs, never matching or persistence IDs.
 Append these compact rows to the pre-recon and refined result sheets, marked
 `Excluded` from Inomial matching, with no billing links or review requirement.
+Keep the established voice summary grouping. Populate other supplier charge
+categories with numeric zero and include the exclusion explanation in the agent
+reasoning column. Do not invent a service/customer/billing identity for a summary
+that spans multiple services.
 Both Financial Audit views use the existing usage charge column; no extra voice
 amount column. Include voice exactly once in complete source detail and refined
 report totals before calculating the previous-bill adjustment split.
 XLSX parsed tabs are `Parsed Invoice (<source families>)`, with
 `Parsed Invoice (002|006)` for voice. CSV mode remains supported.
+
+Report columns place **ChargeType**, **UsageQuantity**, and **UsageUnit** immediately before supplier charge amounts. Labels distinguish voice source/category, data download/upload or bandwidth, and regular charge types; combined refined rows retain all contributing charge-type labels. Missing source quantities or units are explicitly marked `Not supplied`.
