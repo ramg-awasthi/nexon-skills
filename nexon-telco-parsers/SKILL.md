@@ -28,9 +28,11 @@ parser from the skill directory.
   source provenance, warnings, and accounting.
 - For AAPT, require `rec001` invoice/account/period identity and `rec005`
   primary service charges; include optional `rec004` and `rec010` when present.
-  Stream every `rec002` and `rec006` charge into `voice-usage-summary.csv`,
+  Stream every `rec002` and `rec006` charge into `voice-usage-summary.<format>`,
   grouped by invoice/source member/service type/usage type with exact amounts
-  and source-row counts. Include voice in financial accounting; voice matching
+  and source-row counts plus usage quantities and units. Preserve billed and raw
+  data quantities/units, including zero-charge rows. Include compact voice rows
+  in report totals without creating matching inputs; voice matching
   against Inomial is out of scope. `rec012` is reference-only.
 - Preserve the full AAPT invoice service identifier. Do not shorten it at a
   dash or aggregate it before deterministic billing matching. Mark `rec004`

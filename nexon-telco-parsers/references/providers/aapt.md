@@ -45,14 +45,19 @@ Runtime boundary: the installed `nexon-recon parse --provider AAPT` command.
 
 ## Voice financial accounting
 
-Publish `voice-usage-summary.csv` under `01_Parsed-Output` when voice source
+Publish `voice-usage-summary.<format>` under `01_Parsed-Output` when voice source
 rows are present. Each summary contains supplier account, invoice, source
-file/member, service type, usage type, source-row count, and amount excluding GST.
-Retain zero totals and credits. Reject malformed financial amounts and invoice
-account mismatches. Voice summary groups do not create reconciliation line IDs.
-The Financial Audit adds one column, `Voice Usage Amount Ex GST (002/006)`.
-Existing control reasons explain that voice is included in financial accounting
-and that only Inomial matching is out of scope. Compare all parsed usage,
-including `rec010`, with header usage. Include voice exactly once in complete
-source detail and refined-plus-exclusions controls before calculating the
-previous-bill adjustment split.
+file/member, service type, usage type, source-row count, amount excluding GST,
+usage quantity and unit. Sum voice raw duration in its stated unit, grouping
+incompatible units separately. Missing source quantities remain blank, not zero.
+Retain zero charges and credits. Reject malformed financial amounts, quantities,
+quantity/unit pairs, and invoice account mismatches. Preserve `rec010` billed and
+raw quantities/units separately; never combine Mbps rates with MBytes volume.
+Voice summary groups create report-only IDs, never matching or persistence IDs.
+Append these compact rows to the pre-recon and refined result sheets, marked
+`Excluded` from Inomial matching, with no billing links or review requirement.
+Both Financial Audit views use the existing usage charge column; no extra voice
+amount column. Include voice exactly once in complete source detail and refined
+report totals before calculating the previous-bill adjustment split.
+XLSX parsed tabs are `Parsed Invoice (<source families>)`, with
+`Parsed Invoice (002|006)` for voice. CSV mode remains supported.

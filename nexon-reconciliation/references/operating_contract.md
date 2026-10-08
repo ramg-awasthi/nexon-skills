@@ -76,8 +76,13 @@ under `Metadata/`.
 
 `awaiting_parsed_publication` means provider parsing is complete and the
 runtime has frozen a small parsed artifact set before DB matching begins. The
-set contains `01_Parsed-Output/raw_parsed_invoice.csv` and
-`01_Parsed-Output/parser_manifest.json`.
+set contains `01_Parsed-Output/raw_parsed_invoice.<locked format>`,
+`01_Parsed-Output/parser_manifest.json`, and
+`01_Parsed-Output/voice-usage-summary.<locked format>` when voice rows are present.
+XLSX parsed files have explicit `Parsed Invoice (<source families>)` tabs.
+Voice summaries carry source-row counts, charges, duration quantities and units.
+They are appended to result sheets as report-only rows excluded from matching.
+Data usage preserves billed/raw quantities and units independently of charges.
 
 The supervisor prepares upload sessions only for that frozen set through
 `recon_sp_prepare_result_uploads`. Only frozen metadata is sent:
@@ -318,6 +323,8 @@ The run completes with `validation=completed_with_audit_mismatch` and publishes
 both reports. The audit summary records invoice, control, expected amount,
 actual amount, difference, currency, and reason. Missing, corrupt, changed, or
 unpublished artifacts remain blocking technical failures.
+Standalone XLSX contains only `Financial Audit`; run metadata remains in its manifest.
+Both audit views use existing usage columns without a duplicate voice amount column.
 The report contains `CurrentCategoryControlReason`, `CurrentGSTControlReason`,
 `SupplierLineControlReason`, and `RefinedTotalControlReason`; every reason states
 pass/fail, expected amount, actual amount, difference, currency, and the

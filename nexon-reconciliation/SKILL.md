@@ -249,19 +249,27 @@ invoice windows for candidate retrieval and matching.
 
 Report raw rows, charge-input rows, reference/header rows, aggregation input and
 output rows, suppressed rows, normalized output rows, and financial totals.
-Preserve individual reconciliation charge rows in `raw_parsed_invoice.csv`.
-Only the separate voice financial summary groups source usage rows; billing
-lookup continues to operate on eligible individual reconciliation lines.
+Preserve individual reconciliation charge rows in `raw_parsed_invoice.<format>`.
+Billing lookup continues to operate on eligible individual reconciliation lines.
 AAPT requires `rec001` invoice/account/period identity and `rec005` primary
-service charges. `rec004` and `rec010` are optional. Stream all `rec002` and
-`rec006` charges into `01_Parsed-Output/voice-usage-summary.csv` with source-row
-counts and exact amounts. Include voice in complete invoice financial accounting;
-only voice matching against Inomial is out of scope. Never treat voice summaries
-as unmatched-service exceptions. `rec012` is reference-only. Publish the
-runtime-emitted voice CSV in the frozen parsed artifact set without editing it.
-The Financial Audit adds one column, `Voice Usage Amount Ex GST (002/006)`,
-and explains the matching scope in existing reason fields. Include these amounts
-exactly once when balancing complete source detail against refined output.
+service charges; `rec004` and `rec010` are optional. Stream all `rec002` and
+`rec006` rows into `01_Parsed-Output/voice-usage-summary.<format>` with source-row
+counts, exact amounts, usage quantities and units. Group incompatible units
+separately. Preserve billed and raw quantities/units for `rec010`, including
+zero-charge consumption. Rates such as Mbps must not be added as consumed volume.
+Publish the runtime-emitted files in the frozen parsed set without editing them.
+For XLSX, parsed tabs are `Parsed Invoice (<source families>)`, including
+`Parsed Invoice (002|006)` for voice; the pre-reconciliation tab is `Pre-Recon Result`.
+Append compact voice rows to pre-recon and refined `Recon Result` for invoice
+accounting, marked `Excluded` with no billing relationship and no human review
+required. Voice matching against Inomial remains excluded; these rows never enter
+billing lookup, persisted matching results or unmatched-service investigations.
+`rec012` is reference-only. Include voice exactly once in the report total and
+Financial Audit; do not add a separate voice amount column to either audit view.
+The standalone XLSX audit contains only `Financial Audit`; keep run metadata in
+its manifest. Report usage quantities in `Usage Quantity` and `Usage Unit`,
+separately from the monetary `SupplierUsage` field. Quantity-bearing data rows
+remain individual after matching, so rates or incompatible units are not summed.
 The refined output may aggregate
 only rows that already share one verified billing identity. Record every
 contributing source-line ID in `report_aggregation_manifest.json`; do not add
