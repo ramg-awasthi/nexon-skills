@@ -33,7 +33,11 @@ parser from the skill directory.
   and source-row counts plus usage quantities and units. Preserve billed and raw
   data quantities/units, including zero-charge rows. Include compact voice rows
   in report totals without creating matching inputs; voice matching
-  against Inomial is out of scope. `rec012` is reference-only.
+  against Inomial is out of scope. Map rec004/rec005 `Qty` to report
+  `UsageQuantity`, preserve exact `Rate` in parsed provenance, and use
+  `UsageUnit` from the invoice when available. Explicitly display
+  `Not supplied` for missing quantity/unit; never fabricate a measure.
+  `rec012` is reference-only.
 - Preserve the full AAPT invoice service identifier. Do not shorten it at a
   dash or aggregate it before deterministic billing matching. Mark `rec004`
   account-level rows as reportable but not eligible for service matching.
